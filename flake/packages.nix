@@ -93,6 +93,76 @@ in
           book = pkgs.callPackage ../book {
             attic = self'.packages.attic;
           };
+
+          # Cloudflare Worker package
+          attic-worker = pkgs.stdenv.mkDerivation {
+            pname = "attic-worker";
+            version = "0.1.0";
+
+            src = lib.cleanSourceWith {
+              filter = name: type:
+                !(type == "directory" && builtins.elem (baseNameOf name) [
+                  ".ci"
+                  ".github"
+                  "book"
+                  "integration-tests"
+                  "nixos"
+                  "target"
+                ]);
+              src = lib.cleanSource ./..;
+            };
+
+            nativeBuildInputs = with pkgs; [
+              rustc
+              cargo
+              wasm-pack
+              wasm-bindgen-cli
+              worker-build
+              nodejs
+              llvmPackages_latest.bintools
+            ];
+
+            buildInputs = with pkgs; [
+              openssl
+            ];
+
+            RUST_MIN_STACK = "16777216";
+
+            buildPhase = ''
+              runHook preBuild
+
+              cd worker
+              export CARGO_HOME=$TMPDIR/cargo
+              mkdir -p $CARGO_HOME
+              worker-build --release
+
+              runHook postBuild
+            '';
+
+            installPhase = ''
+              runHook preInstall
+
+              mkdir -p $out
+              cp -r build/* $out/
+              cp wrangler.toml $out/
+
+              runHook postInstall
+            '';
+
+            meta = with lib; {
+              description = "Attic Cloudflare Worker - serverless Nix binary cache";
+              homepage = "https://github.com/zhaofengli/attic";
+              license = licenses.asl20;
+              platforms = platforms.linux ++ platforms.darwin;
+            };
+          };
+
+          # Script to help with local worker development
+          attic-worker-dev = pkgs.writeShellScriptBin "attic-worker-dev" ''
+            set -euo pipefail
+            cd "''${1:-.}/worker"
+            exec ${pkgs.wrangler}/bin/wrangler dev
+          '';
         };
       }
 

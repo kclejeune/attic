@@ -33,6 +33,18 @@ ci-build-wasm:
 	cargo build --target wasm32-unknown-unknown
 	popd
 
+# (CI) Build Cloudflare Worker
+ci-build-worker:
+	#!/usr/bin/env bash
+	set -euxo pipefail
+
+	# https://github.com/rust-lang/rust/issues/122357
+	export RUST_MIN_STACK=16777216
+
+	pushd worker
+	worker-build --release
+	popd
+
 # (CI) Run unit tests
 ci-unit-tests matrix:
 	#!/usr/bin/env bash

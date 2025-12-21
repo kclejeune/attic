@@ -127,6 +127,11 @@ jobs:
         run: |
           .ci/run just ci-build-wasm
 
+      - name: Build Cloudflare Worker
+        if: runner.os == 'Linux'
+        run: |
+          .ci/run just ci-build-worker
+
       # TODO: Just take a diff of the list of store paths, also abstract all of this out
       - name: Push build artifacts
         run: |
