@@ -153,4 +153,45 @@ impl Database {
             Database::Turso(backend) => backend.find_existing_paths(cache_name, hashes).await,
         }
     }
+
+    /// Update cache configuration.
+    pub async fn update_cache(
+        &self,
+        name: &str,
+        is_public: Option<bool>,
+        priority: Option<i32>,
+        compression: Option<&str>,
+        retention_period: Option<Option<i32>>,
+        upstream_cache_key_names: Option<&[String]>,
+        keypair: Option<&str>,
+    ) -> WorkerResult<()> {
+        match self {
+            Database::D1(backend) => {
+                backend
+                    .update_cache(
+                        name,
+                        is_public,
+                        priority,
+                        compression,
+                        retention_period,
+                        upstream_cache_key_names,
+                        keypair,
+                    )
+                    .await
+            }
+            Database::Turso(backend) => {
+                backend
+                    .update_cache(
+                        name,
+                        is_public,
+                        priority,
+                        compression,
+                        retention_period,
+                        upstream_cache_key_names,
+                        keypair,
+                    )
+                    .await
+            }
+        }
+    }
 }

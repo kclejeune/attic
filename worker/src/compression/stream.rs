@@ -7,7 +7,7 @@
 use sha2::{Digest, Sha256};
 
 use super::config::{CompressionConfig, CompressionLevel, CompressionType};
-use crate::error::WorkerResult;
+use crate::error::{WorkerError, WorkerResult};
 
 /// Result of a compression operation.
 pub struct CompressionResult {
@@ -36,25 +36,77 @@ pub struct CompressionResult {
 /// 1. Computes SHA256 hash of the input (NAR hash)
 /// 2. Compresses the input using the configured compression
 /// 3. Computes SHA256 hash of the output (file hash)
-pub fn compress_buffer(input: &[u8], config: &CompressionConfig) -> WorkerResult<CompressionResult> {
+pub fn compress_buffer(
+    input: &[u8],
+    config: &CompressionConfig,
+) -> WorkerResult<CompressionResult> {
     // Compute NAR hash (hash of uncompressed data)
     let mut nar_hasher = Sha256::new();
     nar_hasher.update(input);
     let nar_hash = hex::encode(nar_hasher.finalize());
     let nar_size = input.len() as u64;
 
-    // Compress data
-    let compressed = match config.r#type {
-        CompressionType::None => input.to_vec(),
+    // Compress data and track actual compression type used
+    let (compressed, actual_compression) = match config.r#type {
+        CompressionType::None => (input.to_vec(), CompressionType::None),
         CompressionType::Zstd => {
+            // Map compression level to zstd level (1-22)
             let level = match config.level {
-                CompressionLevel::Fastest => ruzstd::encoding::CompressionLevel::Fastest,
-                CompressionLevel::Default => ruzstd::encoding::CompressionLevel::Default,
-                CompressionLevel::Better => ruzstd::encoding::CompressionLevel::Better,
-                CompressionLevel::Best => ruzstd::encoding::CompressionLevel::Best,
+                CompressionLevel::Fastest => 1,
+                CompressionLevel::Default => 3,
+                CompressionLevel::Better => 9,
+                CompressionLevel::Best => 19,
             };
 
-            ruzstd::encoding::compress_to_vec(input, level)
+            (
+                super::js_zstd::compress(input, level)?,
+                CompressionType::Zstd,
+            )
+        }
+        CompressionType::Brotli => {
+            // Map compression level to brotli quality (0-11)
+            let quality = match config.level {
+                CompressionLevel::Fastest => 1,
+                CompressionLevel::Default => 4,
+                CompressionLevel::Better => 7,
+                CompressionLevel::Best => 11,
+            };
+
+            let mut compressed = Vec::new();
+            let params = brotli::enc::BrotliEncoderParams {
+                quality,
+                lgwin: 22, // Window size (22 = 4MB)
+                ..Default::default()
+            };
+
+            brotli::BrotliCompress(&mut std::io::Cursor::new(input), &mut compressed, &params)
+                .map_err(|e| {
+                    WorkerError::Compression(format!("Brotli compression failed: {:?}", e))
+                })?;
+
+            (compressed, CompressionType::Brotli)
+        }
+        CompressionType::Gzip => {
+            // Map compression level to flate2 level (0-9)
+            let level = match config.level {
+                CompressionLevel::Fastest => flate2::Compression::fast(),
+                CompressionLevel::Default => flate2::Compression::default(),
+                CompressionLevel::Better => flate2::Compression::new(7),
+                CompressionLevel::Best => flate2::Compression::best(),
+            };
+
+            use flate2::write::GzEncoder;
+            use std::io::Write;
+
+            let mut encoder = GzEncoder::new(Vec::new(), level);
+            encoder.write_all(input).map_err(|e| {
+                WorkerError::Compression(format!("Gzip compression failed: {:?}", e))
+            })?;
+            let compressed = encoder
+                .finish()
+                .map_err(|e| WorkerError::Compression(format!("Gzip finish failed: {:?}", e)))?;
+
+            (compressed, CompressionType::Gzip)
         }
     };
 
@@ -70,6 +122,6 @@ pub fn compress_buffer(input: &[u8], config: &CompressionConfig) -> WorkerResult
         nar_size,
         file_hash,
         file_size,
-        compression: config.r#type,
+        compression: actual_compression,
     })
 }

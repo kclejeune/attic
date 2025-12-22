@@ -2,6 +2,7 @@
 
 use worker::*;
 
+use crate::crypto::{compute_fingerprint, sign_message};
 use crate::error::WorkerError;
 use crate::state::WorkerState;
 
@@ -20,7 +21,9 @@ pub async fn get_nix_cache_info(_req: Request, ctx: RouteContext<()>) -> Result<
     let cache = match state.database.find_cache(&cache_name).await {
         Ok(Some(c)) => c,
         Ok(None) => {
-            return Ok(WorkerError::NotFound(format!("Cache not found: {}", cache_name)).to_response())
+            return Ok(
+                WorkerError::NotFound(format!("Cache not found: {}", cache_name)).to_response(),
+            )
         }
         Err(e) => return Ok(e.to_response()),
     };
@@ -58,22 +61,38 @@ pub async fn get_store_path_info(_req: Request, ctx: RouteContext<()>) -> Result
         Err(e) => return Ok(e.to_response()),
     };
 
+    // Find the cache to get the keypair
+    let cache = match state.database.find_cache(&cache_name).await {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            return Ok(
+                WorkerError::NotFound(format!("Cache not found: {}", cache_name)).to_response(),
+            )
+        }
+        Err(e) => return Ok(e.to_response()),
+    };
+
     // Find the object
-    let obj = match state.database.find_object(&cache_name, store_path_hash).await {
+    let obj = match state
+        .database
+        .find_object(&cache_name, store_path_hash)
+        .await
+    {
         Ok(Some(o)) => o,
         Ok(None) => return Response::error("Not found", 404),
         Err(e) => return Ok(e.to_response()),
     };
 
     // Get chunk info for FileHash/FileSize (first chunk for single-chunk NARs)
-    let nar_id = obj.nar.id.ok_or_else(|| {
-        worker::Error::RustError("NAR has no ID".to_string())
-    })?;
+    let nar_id = obj
+        .nar
+        .id
+        .ok_or_else(|| worker::Error::RustError("NAR has no ID".to_string()))?;
     let chunks = state.database.find_chunks_for_nar(nar_id).await.ok();
     let first_chunk = chunks.as_ref().and_then(|c| c.first());
 
-    // Build narinfo response
-    let narinfo = build_narinfo(&obj.object, &obj.nar, first_chunk)?;
+    // Build narinfo response with server-side signing
+    let narinfo = build_narinfo(&obj.object, &obj.nar, first_chunk, Some(&cache.keypair))?;
 
     let mut headers = Headers::new();
     headers.set("Content-Type", "text/x-nix-narinfo")?;
@@ -116,7 +135,9 @@ pub async fn get_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Err(e) => return Ok(e.to_response()),
     };
 
-    let nar_id = nar.id.ok_or_else(|| worker::Error::RustError("NAR has no ID".to_string()))?;
+    let nar_id = nar
+        .id
+        .ok_or_else(|| worker::Error::RustError("NAR has no ID".to_string()))?;
 
     // Find chunks
     let chunks = match state.database.find_chunks_for_nar(nar_id).await {
@@ -151,7 +172,8 @@ pub async fn get_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
                 Ok(Response::from_bytes(bytes.to_vec())?.with_headers(headers))
             }
             Ok(crate::storage::Download::Url(url)) => Response::redirect_with_status(
-                Url::parse(&url).map_err(|e| worker::Error::RustError(format!("Invalid URL: {}", e)))?,
+                Url::parse(&url)
+                    .map_err(|e| worker::Error::RustError(format!("Invalid URL: {}", e)))?,
                 302,
             ),
             Err(e) => Ok(e.to_response()),
@@ -164,10 +186,14 @@ pub async fn get_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
 }
 
 /// Build a narinfo string from object, nar, and optional chunk data.
+///
+/// If a keypair is provided and the object has no signatures, the server
+/// will sign the narinfo with the cache's keypair.
 fn build_narinfo(
     object: &crate::database::Object,
     nar: &crate::database::Nar,
     chunk: Option<&crate::database::Chunk>,
+    keypair: Option<&str>,
 ) -> Result<String> {
     use std::fmt::Write;
 
@@ -178,10 +204,14 @@ fn build_narinfo(
 
     // URL for the NAR file (with compression extension)
     // Strip sha256: prefix if present for clean URL
-    let hash_for_url = nar.nar_hash.strip_prefix("sha256:").unwrap_or(&nar.nar_hash);
+    let hash_for_url = nar
+        .nar_hash
+        .strip_prefix("sha256:")
+        .unwrap_or(&nar.nar_hash);
     let extension = match nar.compression.as_str() {
         "zstd" => ".zst",
         "brotli" | "br" => ".br",
+        "gzip" | "gz" => ".gz",
         "xz" => ".xz",
         _ => "", // "none" or unknown
     };
@@ -206,7 +236,10 @@ fn build_narinfo(
 
     // NAR hash and size (uncompressed)
     // Strip prefix if already present (client may send "sha256:..." or just hash)
-    let nar_hash = nar.nar_hash.strip_prefix("sha256:").unwrap_or(&nar.nar_hash);
+    let nar_hash = nar
+        .nar_hash
+        .strip_prefix("sha256:")
+        .unwrap_or(&nar.nar_hash);
     writeln!(narinfo, "NarHash: sha256:{}", nar_hash)
         .map_err(|e| worker::Error::RustError(e.to_string()))?;
     writeln!(narinfo, "NarSize: {}", nar.nar_size)
@@ -230,16 +263,38 @@ fn build_narinfo(
             .map_err(|e| worker::Error::RustError(e.to_string()))?;
     }
 
-    // Signatures
+    // Signatures - include client-provided signatures
     for sig in &object.sigs {
-        writeln!(narinfo, "Sig: {}", sig)
-            .map_err(|e| worker::Error::RustError(e.to_string()))?;
+        writeln!(narinfo, "Sig: {}", sig).map_err(|e| worker::Error::RustError(e.to_string()))?;
+    }
+
+    // Server-side signing: if no signatures exist and we have a keypair, sign the narinfo
+    if object.sigs.is_empty() {
+        if let Some(keypair) = keypair {
+            // Compute the fingerprint and sign it
+            let fingerprint = compute_fingerprint(
+                &object.store_path,
+                &nar.nar_hash,
+                nar.nar_size,
+                &object.references,
+            );
+
+            match sign_message(keypair, &fingerprint) {
+                Ok(signature) => {
+                    writeln!(narinfo, "Sig: {}", signature)
+                        .map_err(|e| worker::Error::RustError(e.to_string()))?;
+                }
+                Err(e) => {
+                    // Log the error but don't fail - unsigned narinfo is still valid
+                    web_sys::console::warn_1(&format!("Failed to sign narinfo: {}", e).into());
+                }
+            }
+        }
     }
 
     // CA (content-addressed)
     if let Some(ref ca) = object.ca {
-        writeln!(narinfo, "CA: {}", ca)
-            .map_err(|e| worker::Error::RustError(e.to_string()))?;
+        writeln!(narinfo, "CA: {}", ca).map_err(|e| worker::Error::RustError(e.to_string()))?;
     }
 
     Ok(narinfo)

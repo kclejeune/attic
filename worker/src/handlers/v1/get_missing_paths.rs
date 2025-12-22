@@ -42,7 +42,9 @@ pub async fn get_missing_paths(mut req: Request, ctx: RouteContext<()>) -> Resul
     // Check authentication
     let token = match req_state.token {
         Some(t) => t,
-        None => return Ok(WorkerError::Authentication("No token provided".to_string()).to_response()),
+        None => {
+            return Ok(WorkerError::Authentication("No token provided".to_string()).to_response())
+        }
     };
 
     // Check permission to push (need push permission to query missing paths)

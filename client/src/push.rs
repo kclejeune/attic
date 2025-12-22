@@ -43,7 +43,7 @@ type JobSender = channel::Sender<ValidPathInfo>;
 type JobReceiver = channel::Receiver<ValidPathInfo>;
 
 /// Configuration for pushing store paths.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct PushConfig {
     /// The number of workers to spawn.
     pub num_workers: usize,
@@ -160,7 +160,7 @@ impl Pusher {
                 api.clone(),
                 cache.clone(),
                 mp.clone(),
-                config,
+                config.clone(),
             )));
         }
 
@@ -503,35 +503,34 @@ pub async fn upload_path(
     force_preamble: bool,
 ) -> Result<()> {
     let path = &path_info.path;
-    let upload_info = {
-        let full_path = store
-            .get_full_path(path)
-            .to_str()
-            .ok_or_else(|| anyhow!("Path contains non-UTF-8"))?
-            .to_string();
 
-        let references = path_info
-            .references
-            .into_iter()
-            .map(|pb| {
-                pb.to_str()
-                    .ok_or_else(|| anyhow!("Reference contains non-UTF-8"))
-                    .map(|s| s.to_owned())
-            })
-            .collect::<Result<Vec<String>, anyhow::Error>>()?;
+    let full_path = store
+        .get_full_path(path)
+        .to_str()
+        .ok_or_else(|| anyhow!("Path contains non-UTF-8"))?
+        .to_string();
 
-        UploadPathNarInfo {
-            cache: cache.to_owned(),
-            store_path_hash: path.to_hash(),
-            store_path: full_path,
-            references,
-            system: None,  // TODO
-            deriver: None, // TODO
-            sigs: path_info.sigs,
-            ca: path_info.ca,
-            nar_hash: path_info.nar_hash.to_owned(),
-            nar_size: path_info.nar_size as usize,
-        }
+    let references = path_info
+        .references
+        .into_iter()
+        .map(|pb| {
+            pb.to_str()
+                .ok_or_else(|| anyhow!("Reference contains non-UTF-8"))
+                .map(|s| s.to_owned())
+        })
+        .collect::<Result<Vec<String>, anyhow::Error>>()?;
+
+    let upload_info = UploadPathNarInfo {
+        cache: cache.to_owned(),
+        store_path_hash: path.to_hash(),
+        store_path: full_path,
+        references,
+        system: None,  // TODO
+        deriver: None, // TODO
+        sigs: path_info.sigs,
+        ca: path_info.ca,
+        nar_hash: path_info.nar_hash.to_owned(),
+        nar_size: path_info.nar_size as usize,
     };
 
     let template = format!(
@@ -558,14 +557,18 @@ pub async fn upload_path(
         );
     let bar = mp.add(ProgressBar::new(path_info.nar_size));
     bar.set_style(style);
+
+    let start = Instant::now();
+
+    // Upload uncompressed NAR - server handles compression
     let nar_stream = NarStreamProgress::new(store.nar_from_path(path.to_owned()), bar.clone())
         .map_ok(Bytes::from);
 
-    let start = Instant::now();
-    match api
+    let result = api
         .upload_path(upload_info, nar_stream, force_preamble)
-        .await
-    {
+        .await;
+
+    match result {
         Ok(r) => {
             let r = r.unwrap_or(UploadPathResult {
                 kind: UploadPathResultKind::Uploaded,

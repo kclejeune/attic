@@ -16,7 +16,7 @@ worker = { version = "0.4", features = ["d1"] }
 console_error_panic_hook = "0.1"
 
 # WASM-compatible async
-wasm-bindgen = "0.2"
+wasm-bindgen = "=0.2.105"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
@@ -26,6 +26,13 @@ web-sys = { version = "0.3", features = [
     "RequestInit",
     "Response",
     "Window",
+    # Streaming compression (requires --cfg=web_sys_unstable_apis)
+    "CompressionStream",
+    "CompressionFormat",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "ReadableWritablePair",
+    "WritableStream",
 ] }
 serde-wasm-bindgen = "0.6"
 
@@ -41,7 +48,16 @@ base64 = "0.22"
 getrandom = { version = "0.2", features = ["js"] }
 
 # Compression (WASM-compatible)
-ruzstd = "0.8"
+brotli = "7.0"
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+# zstd uses @yu7400ki/zstd-wasm via JS bindings (has explicit Workers support)
+
+# Ed25519 keypair generation and signing (WASM-compatible)
+ed25519-dalek = { version = "2.1", default-features = false, features = ["rand_core"] }
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
+
+# Nix-compatible base32 encoding
+nix-base32 = "0.2.0"
 
 [profile.release]
 opt-level = "s"

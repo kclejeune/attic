@@ -32,6 +32,9 @@ pub enum WorkerError {
     /// Database error.
     Database(String),
 
+    /// Compression error.
+    Compression(String),
+
     /// Internal error.
     Internal(String),
 }
@@ -46,6 +49,7 @@ impl fmt::Display for WorkerError {
             WorkerError::BadRequest(msg) => write!(f, "Bad request: {}", msg),
             WorkerError::Storage(msg) => write!(f, "Storage error: {}", msg),
             WorkerError::Database(msg) => write!(f, "Database error: {}", msg),
+            WorkerError::Compression(msg) => write!(f, "Compression error: {}", msg),
             WorkerError::Internal(msg) => write!(f, "Internal error: {}", msg),
         }
     }
@@ -71,6 +75,7 @@ impl WorkerError {
             WorkerError::BadRequest(_) => 400,
             WorkerError::Storage(_) => 502,
             WorkerError::Database(_) => 502,
+            WorkerError::Compression(_) => 500,
             WorkerError::Internal(_) => 500,
         }
     }
@@ -85,6 +90,7 @@ impl WorkerError {
             WorkerError::BadRequest(_) => "BadRequest",
             WorkerError::Storage(_) => "StorageError",
             WorkerError::Database(_) => "DatabaseError",
+            WorkerError::Compression(_) => "CompressionError",
             WorkerError::Internal(_) => "InternalError",
         }
     }
@@ -125,21 +131,5 @@ impl From<serde_json::Error> for WorkerError {
 impl From<WorkerError> for worker::Error {
     fn from(e: WorkerError) -> Self {
         worker::Error::RustError(e.to_string())
-    }
-}
-
-/// Extension trait for converting WorkerResult to worker::Result<Response>.
-#[allow(dead_code)]
-pub trait IntoWorkerResponse {
-    fn into_worker_response(self) -> worker::Result<Response>;
-}
-
-#[allow(dead_code)]
-impl<T: serde::Serialize> IntoWorkerResponse for WorkerResult<T> {
-    fn into_worker_response(self) -> worker::Result<Response> {
-        match self {
-            Ok(value) => Response::from_json(&value),
-            Err(e) => Ok(e.to_response()),
-        }
     }
 }

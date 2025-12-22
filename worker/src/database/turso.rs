@@ -49,7 +49,11 @@ impl TursoBackend {
     }
 
     /// Execute a query and return raw results.
-    async fn execute(&self, sql: &str, params: Vec<serde_json::Value>) -> WorkerResult<TursoResult> {
+    async fn execute(
+        &self,
+        sql: &str,
+        params: Vec<serde_json::Value>,
+    ) -> WorkerResult<TursoResult> {
         let request = TursoRequest {
             statements: vec![TursoStatement {
                 q: sql.to_string(),
@@ -124,7 +128,7 @@ impl TursoBackend {
         let result = self
             .execute(
                 "SELECT id, name, keypair, is_public, store_dir, priority, \
-                 upstream_cache_key_names, created_at, deleted_at, retention_period \
+                 upstream_cache_key_names, compression, created_at, deleted_at, retention_period \
                  FROM cache WHERE name = ? AND deleted_at IS NULL",
                 vec![serde_json::Value::String(name.to_string())],
             )
@@ -213,8 +217,8 @@ impl TursoBackend {
         let result = self
             .execute(
                 "INSERT INTO cache (name, keypair, is_public, store_dir, priority, \
-                 upstream_cache_key_names, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?) \
+                 upstream_cache_key_names, compression, created_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
                  ON CONFLICT (name) DO NOTHING \
                  RETURNING id",
                 vec![
@@ -226,14 +230,15 @@ impl TursoBackend {
                     serde_json::Value::String(
                         serde_json::to_string(&cache.upstream_cache_key_names).unwrap_or_default(),
                     ),
+                    serde_json::Value::String(cache.compression.clone()),
                     serde_json::Value::String(cache.created_at.clone()),
                 ],
             )
             .await?;
 
-        result.last_insert_rowid.ok_or_else(|| {
-            WorkerError::Database("No row ID returned from insert".to_string())
-        })
+        result
+            .last_insert_rowid
+            .ok_or_else(|| WorkerError::Database("No row ID returned from insert".to_string()))
     }
 
     /// Create a new NAR entry.
@@ -257,9 +262,9 @@ impl TursoBackend {
             )
             .await?;
 
-        result.last_insert_rowid.ok_or_else(|| {
-            WorkerError::Database("No row ID returned from insert".to_string())
-        })
+        result
+            .last_insert_rowid
+            .ok_or_else(|| WorkerError::Database("No row ID returned from insert".to_string()))
     }
 
     /// Create a new chunk entry.
@@ -292,9 +297,9 @@ impl TursoBackend {
             )
             .await?;
 
-        result.last_insert_rowid.ok_or_else(|| {
-            WorkerError::Database("No row ID returned from insert".to_string())
-        })
+        result
+            .last_insert_rowid
+            .ok_or_else(|| WorkerError::Database("No row ID returned from insert".to_string()))
     }
 
     /// Create a new object entry.
@@ -342,9 +347,9 @@ impl TursoBackend {
             )
             .await?;
 
-        result.last_insert_rowid.ok_or_else(|| {
-            WorkerError::Database("No row ID returned from insert".to_string())
-        })
+        result
+            .last_insert_rowid
+            .ok_or_else(|| WorkerError::Database("No row ID returned from insert".to_string()))
     }
 
     /// Create a chunk reference.
@@ -367,9 +372,9 @@ impl TursoBackend {
             )
             .await?;
 
-        result.last_insert_rowid.ok_or_else(|| {
-            WorkerError::Database("No row ID returned from insert".to_string())
-        })
+        result
+            .last_insert_rowid
+            .ok_or_else(|| WorkerError::Database("No row ID returned from insert".to_string()))
     }
 
     /// Update NAR state.
@@ -394,9 +399,9 @@ impl TursoBackend {
             None => return Ok(None),
         };
 
-        let nar_id = nar.id.ok_or_else(|| {
-            WorkerError::Database("NAR has no ID".to_string())
-        })?;
+        let nar_id = nar
+            .id
+            .ok_or_else(|| WorkerError::Database("NAR has no ID".to_string()))?;
 
         // Try to atomically increment holders_count
         let result = self
@@ -473,6 +478,72 @@ impl TursoBackend {
 
         Ok(existing)
     }
+
+    /// Update cache configuration.
+    pub async fn update_cache(
+        &self,
+        name: &str,
+        is_public: Option<bool>,
+        priority: Option<i32>,
+        compression: Option<&str>,
+        retention_period: Option<Option<i32>>,
+        upstream_cache_key_names: Option<&[String]>,
+        keypair: Option<&str>,
+    ) -> WorkerResult<()> {
+        // Build dynamic UPDATE query
+        let mut updates = Vec::new();
+        let mut params: Vec<serde_json::Value> = Vec::new();
+
+        if let Some(val) = is_public {
+            updates.push("is_public = ?");
+            params.push(serde_json::Value::Bool(val));
+        }
+
+        if let Some(val) = priority {
+            updates.push("priority = ?");
+            params.push(serde_json::Value::Number(val.into()));
+        }
+
+        if let Some(val) = compression {
+            updates.push("compression = ?");
+            params.push(serde_json::Value::String(val.to_string()));
+        }
+
+        if let Some(val) = retention_period {
+            updates.push("retention_period = ?");
+            match val {
+                Some(n) => params.push(serde_json::Value::Number(n.into())),
+                None => params.push(serde_json::Value::Null),
+            }
+        }
+
+        if let Some(val) = upstream_cache_key_names {
+            updates.push("upstream_cache_key_names = ?");
+            let json = serde_json::to_string(val).unwrap_or_default();
+            params.push(serde_json::Value::String(json));
+        }
+
+        if let Some(val) = keypair {
+            updates.push("keypair = ?");
+            params.push(serde_json::Value::String(val.to_string()));
+        }
+
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        // Add the name parameter for WHERE clause
+        params.push(serde_json::Value::String(name.to_string()));
+
+        let query = format!(
+            "UPDATE cache SET {} WHERE name = ? AND deleted_at IS NULL",
+            updates.join(", ")
+        );
+
+        self.execute(&query, params).await?;
+
+        Ok(())
+    }
 }
 
 /// Parse a cache row from query results.
@@ -501,13 +572,18 @@ fn parse_cache_row(row: &[serde_json::Value]) -> WorkerResult<Cache> {
             .and_then(|v| v.as_str())
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default(),
-        created_at: row
+        compression: row
             .get(7)
+            .and_then(|v| v.as_str())
+            .unwrap_or("br")
+            .to_string(),
+        created_at: row
+            .get(8)
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        deleted_at: row.get(8).and_then(|v| v.as_str()).map(|s| s.to_string()),
-        retention_period: row.get(9).and_then(|v| v.as_i64()).map(|n| n as i32),
+        deleted_at: row.get(9).and_then(|v| v.as_str()).map(|s| s.to_string()),
+        retention_period: row.get(10).and_then(|v| v.as_i64()).map(|n| n as i32),
     })
 }
 

@@ -95,6 +95,40 @@ pub struct CacheConfig {
     /// The retention period of the cache.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retention_period: Option<RetentionPeriodConfig>,
+
+    /// Worker capabilities for feature detection.
+    ///
+    /// This is read-only and only available from worker-based caches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_capabilities: Option<WorkerCapabilities>,
+}
+
+/// Worker capabilities for feature detection.
+///
+/// Clients can use this to determine which features the worker supports
+/// and fall back gracefully when features are not available.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkerCapabilities {
+    /// Whether the worker supports preamble-based NAR info.
+    ///
+    /// If true, clients can send large NAR info (>4KB) as a body preamble
+    /// instead of a header, avoiding header size limits.
+    #[serde(default)]
+    pub preamble_nar_info: bool,
+
+    /// Whether the worker performs server-side signing.
+    ///
+    /// If true, the worker will sign unsigned narinfo responses
+    /// using the cache's keypair.
+    #[serde(default)]
+    pub server_signing: bool,
+
+    /// Whether the worker performs server-side compression.
+    ///
+    /// If true, clients send uncompressed NAR data and the worker
+    /// compresses it before storage.
+    #[serde(default)]
+    pub server_compression: bool,
 }
 
 /// Configuaration of a keypair.
@@ -131,6 +165,15 @@ impl CacheConfig {
             priority: None,
             upstream_cache_key_names: None,
             retention_period: None,
+            worker_capabilities: None,
         }
+    }
+
+    /// Returns whether the worker supports server-side compression.
+    pub fn supports_server_compression(&self) -> bool {
+        self.worker_capabilities
+            .as_ref()
+            .map(|c| c.server_compression)
+            .unwrap_or(false)
     }
 }

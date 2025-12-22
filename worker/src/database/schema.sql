@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS cache (
     store_dir TEXT NOT NULL DEFAULT '/nix/store',
     priority INTEGER NOT NULL DEFAULT 40,
     upstream_cache_key_names TEXT NOT NULL DEFAULT '[]',
+    compression TEXT NOT NULL DEFAULT 'br', -- none, zstd, br, gzip
     created_at TEXT NOT NULL,
     deleted_at TEXT,
     retention_period INTEGER

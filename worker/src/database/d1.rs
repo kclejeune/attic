@@ -22,7 +22,7 @@ impl D1Backend {
             .db
             .prepare(
                 "SELECT id, name, keypair, is_public, store_dir, priority, \
-                 upstream_cache_key_names, created_at, deleted_at, retention_period \
+                 upstream_cache_key_names, compression, created_at, deleted_at, retention_period \
                  FROM cache WHERE name = ?1 AND deleted_at IS NULL",
             )
             .bind(&[name.into()])
@@ -121,8 +121,8 @@ impl D1Backend {
             .db
             .prepare(
                 "INSERT INTO cache (name, keypair, is_public, store_dir, priority, \
-                 upstream_cache_key_names, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                 upstream_cache_key_names, compression, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
                  ON CONFLICT (name) DO NOTHING",
             )
             .bind(&[
@@ -134,6 +134,7 @@ impl D1Backend {
                 serde_json::to_string(&cache.upstream_cache_key_names)
                     .unwrap_or_default()
                     .into(),
+                cache.compression.clone().into(),
                 cache.created_at.clone().into(),
             ])
             .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
@@ -438,6 +439,90 @@ impl D1Backend {
 
         Ok(existing)
     }
+
+    /// Update cache configuration.
+    pub async fn update_cache(
+        &self,
+        name: &str,
+        is_public: Option<bool>,
+        priority: Option<i32>,
+        compression: Option<&str>,
+        retention_period: Option<Option<i32>>,
+        upstream_cache_key_names: Option<&[String]>,
+        keypair: Option<&str>,
+    ) -> WorkerResult<()> {
+        use worker::wasm_bindgen::JsValue;
+
+        // Build dynamic UPDATE query
+        let mut updates = Vec::new();
+        let mut params: Vec<JsValue> = Vec::new();
+        let mut param_idx = 1;
+
+        if let Some(val) = is_public {
+            updates.push(format!("is_public = ?{}", param_idx));
+            params.push(JsValue::from(val as i32));
+            param_idx += 1;
+        }
+
+        if let Some(val) = priority {
+            updates.push(format!("priority = ?{}", param_idx));
+            params.push(JsValue::from(val));
+            param_idx += 1;
+        }
+
+        if let Some(val) = compression {
+            updates.push(format!("compression = ?{}", param_idx));
+            params.push(JsValue::from_str(val));
+            param_idx += 1;
+        }
+
+        if let Some(val) = retention_period {
+            updates.push(format!("retention_period = ?{}", param_idx));
+            match val {
+                Some(n) => params.push(JsValue::from(n)),
+                None => params.push(JsValue::NULL),
+            }
+            param_idx += 1;
+        }
+
+        if let Some(val) = upstream_cache_key_names {
+            updates.push(format!("upstream_cache_key_names = ?{}", param_idx));
+            let json = serde_json::to_string(val).unwrap_or_default();
+            params.push(JsValue::from_str(&json));
+            param_idx += 1;
+        }
+
+        if let Some(val) = keypair {
+            updates.push(format!("keypair = ?{}", param_idx));
+            params.push(JsValue::from_str(val));
+            param_idx += 1;
+        }
+
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        // Add the name parameter for WHERE clause
+        params.push(JsValue::from_str(name));
+
+        let query = format!(
+            "UPDATE cache SET {} WHERE name = ?{} AND deleted_at IS NULL",
+            updates.join(", "),
+            param_idx
+        );
+
+        let stmt = self
+            .db
+            .prepare(&query)
+            .bind(&params)
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
+
+        stmt.run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        Ok(())
+    }
 }
 
 // Row types for D1 deserialization
@@ -450,6 +535,7 @@ struct CacheRow {
     store_dir: String,
     priority: i32,
     upstream_cache_key_names: String,
+    compression: String,
     created_at: String,
     deleted_at: Option<String>,
     retention_period: Option<i32>,
@@ -466,6 +552,7 @@ impl From<CacheRow> for Cache {
             priority: row.priority,
             upstream_cache_key_names: serde_json::from_str(&row.upstream_cache_key_names)
                 .unwrap_or_default(),
+            compression: row.compression,
             created_at: row.created_at,
             deleted_at: row.deleted_at,
             retention_period: row.retention_period,

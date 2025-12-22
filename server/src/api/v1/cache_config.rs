@@ -51,6 +51,7 @@ pub(crate) async fn get_cache_config(
         priority: Some(cache.priority),
         upstream_cache_key_names: Some(cache.upstream_cache_key_names.0),
         retention_period: Some(retention_period_config),
+        worker_capabilities: None, // Standard server doesn't have worker capabilities
     }))
 }
 

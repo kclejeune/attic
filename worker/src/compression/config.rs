@@ -7,13 +7,24 @@ use serde::{Deserialize, Serialize};
 pub enum CompressionType {
     /// No compression.
     #[serde(rename = "none")]
-    #[default]
     None,
 
     /// Zstd compression.
-    /// Note: ruzstd encoding is incomplete as of 0.8, so this currently panics.
+    /// Uses @bokuweb/zstd-wasm via JS bindings for Cloudflare Workers.
     #[serde(rename = "zstd")]
     Zstd,
+
+    /// Brotli compression (default).
+    /// Pure Rust implementation with excellent WASM support.
+    /// Best compression ratio for Nix binary caches.
+    #[serde(rename = "br")]
+    #[default]
+    Brotli,
+
+    /// Gzip compression.
+    /// Uses native CompressionStream API for streaming large files.
+    #[serde(rename = "gzip")]
+    Gzip,
 }
 
 impl CompressionType {
@@ -22,6 +33,8 @@ impl CompressionType {
         match self {
             CompressionType::None => "none",
             CompressionType::Zstd => "zstd",
+            CompressionType::Brotli => "br",
+            CompressionType::Gzip => "gzip",
         }
     }
 
@@ -30,6 +43,8 @@ impl CompressionType {
         match self {
             CompressionType::None => "",
             CompressionType::Zstd => ".zst",
+            CompressionType::Brotli => ".br",
+            CompressionType::Gzip => ".gz",
         }
     }
 }
@@ -68,7 +83,24 @@ fn default_level() -> CompressionLevel {
 impl Default for CompressionConfig {
     fn default() -> Self {
         Self {
-            r#type: CompressionType::None,
+            r#type: CompressionType::Brotli,
+            level: CompressionLevel::Default,
+        }
+    }
+}
+
+impl CompressionConfig {
+    /// Create a compression config from a database string.
+    pub fn from_str(compression: &str) -> Self {
+        let r#type = match compression {
+            "none" => CompressionType::None,
+            "zst" | "zstd" => CompressionType::Zstd,
+            "br" | "brotli" => CompressionType::Brotli,
+            "gz" | "gzip" => CompressionType::Gzip,
+            _ => CompressionType::Brotli, // Default to brotli for unknown
+        };
+        Self {
+            r#type,
             level: CompressionLevel::Default,
         }
     }

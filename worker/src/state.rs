@@ -2,7 +2,6 @@
 
 use worker::*;
 
-use crate::compression::CompressionConfig;
 use crate::database::Database;
 use crate::error::{WorkerError, WorkerResult};
 use crate::storage::R2Backend;
@@ -17,9 +16,6 @@ pub struct WorkerState {
 
     /// JWT signing configuration.
     pub jwt_config: JwtConfig,
-
-    /// Compression configuration.
-    pub compression_config: CompressionConfig,
 }
 
 /// JWT configuration for token validation.
@@ -53,14 +49,10 @@ impl WorkerState {
         // Get JWT configuration
         let jwt_config = JwtConfig::from_env(env)?;
 
-        // Get compression configuration (use defaults for now)
-        let compression_config = CompressionConfig::default();
-
         Ok(Self {
             storage,
             database,
             jwt_config,
-            compression_config,
         })
     }
 }
@@ -69,25 +61,19 @@ impl JwtConfig {
     /// Create JWT config from environment variables/secrets.
     pub fn from_env(env: &Env) -> WorkerResult<Self> {
         // Try to get HS256 secret first
-        let hs256_secret = env
-            .secret("JWT_HS256_SECRET_BASE64")
-            .ok()
-            .and_then(|s| {
-                use base64::{engine::general_purpose::STANDARD, Engine};
-                STANDARD.decode(s.to_string()).ok()
-            });
+        let hs256_secret = env.secret("JWT_HS256_SECRET_BASE64").ok().and_then(|s| {
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            STANDARD.decode(s.to_string()).ok()
+        });
 
         // Try RS256 public key
-        let rs256_pubkey = env
-            .secret("JWT_RS256_PUBKEY_BASE64")
-            .ok()
-            .and_then(|s| {
-                use base64::{engine::general_purpose::STANDARD, Engine};
-                STANDARD
-                    .decode(s.to_string())
-                    .ok()
-                    .and_then(|bytes| String::from_utf8(bytes).ok())
-            });
+        let rs256_pubkey = env.secret("JWT_RS256_PUBKEY_BASE64").ok().and_then(|s| {
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            STANDARD
+                .decode(s.to_string())
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+        });
 
         // Bound issuer (optional)
         let bound_issuer = env.var("JWT_BOUND_ISSUER").ok().map(|v| v.to_string());
@@ -120,49 +106,23 @@ impl JwtConfig {
 pub struct RequestState {
     /// Authenticated token (if any).
     pub token: Option<attic_token::Token>,
-
-    /// The Host header from the request.
-    #[allow(dead_code)]
-    pub host: String,
-
-    /// Whether the client claims HTTPS.
-    #[allow(dead_code)]
-    pub is_https: bool,
 }
 
 impl RequestState {
     /// Extract request state from a Worker request.
     pub fn from_request(req: &Request, jwt_config: &JwtConfig) -> WorkerResult<Self> {
-        let headers = req.headers();
-
-        // Get host
-        let host = headers
-            .get("Host")
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "localhost".to_string());
-
-        // Check if HTTPS (via X-Forwarded-Proto or CF-Visitor)
-        let is_https = headers
-            .get("X-Forwarded-Proto")
-            .ok()
-            .flatten()
-            .map(|v| v == "https")
-            .unwrap_or(false);
-
         // Extract and validate token
         let token = extract_token(req, jwt_config)?;
 
-        Ok(Self {
-            token,
-            host,
-            is_https,
-        })
+        Ok(Self { token })
     }
 }
 
 /// Extract and validate JWT token from request headers.
-fn extract_token(req: &Request, jwt_config: &JwtConfig) -> WorkerResult<Option<attic_token::Token>> {
+fn extract_token(
+    req: &Request,
+    jwt_config: &JwtConfig,
+) -> WorkerResult<Option<attic_token::Token>> {
     let headers = req.headers();
 
     // Try Authorization header first

@@ -15,6 +15,8 @@ pub struct Cache {
     pub store_dir: String,
     pub priority: i32,
     pub upstream_cache_key_names: Vec<String>,
+    /// Compression type: "none", "zstd", or "br" (brotli)
+    pub compression: String,
     pub created_at: String,
     pub deleted_at: Option<String>,
     pub retention_period: Option<i32>,

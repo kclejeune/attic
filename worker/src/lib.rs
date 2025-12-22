@@ -14,6 +14,7 @@
 )]
 
 mod compression;
+mod crypto;
 mod database;
 mod error;
 mod handlers;
@@ -31,6 +32,11 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     // Set up panic hook for better error messages in development
     console_error_panic_hook::set_once();
 
+    // Initialize zstd-wasm (idempotent, only runs once)
+    if let Err(e) = compression::js_zstd::init().await {
+        console_log!("Warning: Failed to initialize zstd-wasm: {}", e);
+    }
+
     // Initialize router
     let router = Router::new();
 
@@ -45,7 +51,10 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         // NAR downloads - match .nar and .nar.* extensions
         .get_async("/:cache/nar/:path", binary_cache::get_nar)
         // Attic API v1
-        .get_async("/:cache/attic-cache-info", v1::cache_config::get_cache_config)
+        .get_async(
+            "/:cache/attic-cache-info",
+            v1::cache_config::get_cache_config,
+        )
         .get_async(
             "/_api/v1/cache-config/:cache",
             v1::cache_config::get_cache_config,

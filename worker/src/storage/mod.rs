@@ -2,4 +2,4 @@
 
 mod r2;
 
-pub use r2::{Download, R2Backend};
+pub use r2::{Download, R2Backend, TARGET_PART_SIZE};
