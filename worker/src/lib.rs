@@ -46,10 +46,14 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             Response::ok("Attic Worker is running")
         })
         // Binary Cache API (Nix protocol)
+        // GET endpoints
         .get_async("/:cache/nix-cache-info", binary_cache::get_nix_cache_info)
         .get_async("/:cache/:path", binary_cache::get_store_path_info)
-        // NAR downloads - match .nar and .nar.* extensions
         .get_async("/:cache/nar/:path", binary_cache::get_nar)
+        // HEAD endpoints (Nix uses HEAD to check path existence)
+        .head_async("/:cache/nix-cache-info", binary_cache::head_nix_cache_info)
+        .head_async("/:cache/:path", binary_cache::head_store_path_info)
+        .head_async("/:cache/nar/:path", binary_cache::head_nar)
         // Attic API v1
         .get_async(
             "/:cache/attic-cache-info",

@@ -194,4 +194,14 @@ impl Database {
             }
         }
     }
+
+    /// Soft-delete a cache by setting deleted_at.
+    ///
+    /// Returns true if a cache was deleted, false if not found.
+    pub async fn delete_cache(&self, name: &str) -> WorkerResult<bool> {
+        match self {
+            Database::D1(backend) => backend.delete_cache(name).await,
+            Database::Turso(backend) => backend.delete_cache(name).await,
+        }
+    }
 }

@@ -294,15 +294,51 @@ pub async fn configure_cache(mut req: Request, ctx: RouteContext<()>) -> Result<
 
 /// DELETE /_api/v1/cache-config/:cache
 ///
-/// Deletes a cache.
-pub async fn destroy_cache(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+/// Soft-deletes a cache by setting its deleted_at timestamp.
+/// The cache will no longer be accessible but data is preserved for potential recovery.
+pub async fn destroy_cache(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
 
-    // TODO: Implement cache deletion
-    Response::error(
-        format!("Cache deletion not yet implemented for {}", cache_name),
-        501,
-    )
+    let state = match WorkerState::from_env(&ctx.env) {
+        Ok(s) => s,
+        Err(e) => return Ok(e.to_response()),
+    };
+
+    let req_state = match RequestState::from_request(&req, &state.jwt_config) {
+        Ok(s) => s,
+        Err(e) => return Ok(e.to_response()),
+    };
+
+    // Check authentication
+    let token = match req_state.token {
+        Some(t) => t,
+        None => {
+            return Ok(WorkerError::Authentication("No token provided".to_string()).to_response())
+        }
+    };
+
+    // Check permission to destroy cache
+    let cache_name_parsed = attic::cache::CacheName::new(cache_name.clone())
+        .map_err(|e| WorkerError::BadRequest(format!("Invalid cache name: {}", e)))?;
+    let permission = token.get_permission_for_cache(&cache_name_parsed);
+    if let Err(e) = permission.require_destroy_cache() {
+        return Ok(WorkerError::Authorization(format!("Permission denied: {:?}", e)).to_response());
+    }
+
+    // Delete the cache
+    match state.database.delete_cache(&cache_name).await {
+        Ok(true) => {
+            let response = serde_json::json!({
+                "name": cache_name,
+                "deleted": true,
+            });
+            Response::from_json(&response)
+        }
+        Ok(false) => Ok(
+            WorkerError::NotFound(format!("Cache not found: {}", cache_name)).to_response(),
+        ),
+        Err(e) => Ok(e.to_response()),
+    }
 }
 
 /// Validate compression type string.

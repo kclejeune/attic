@@ -37,6 +37,25 @@ pub async fn get_nix_cache_info(_req: Request, ctx: RouteContext<()>) -> Result<
     Response::ok(info)
 }
 
+/// HEAD /:cache/nix-cache-info
+///
+/// Returns headers only for cache info check.
+pub async fn head_nix_cache_info(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
+
+    let state = match WorkerState::from_env(&ctx.env) {
+        Ok(s) => s,
+        Err(e) => return Ok(e.to_response()),
+    };
+
+    // Find the cache
+    match state.database.find_cache(&cache_name).await {
+        Ok(Some(_)) => Response::empty(),
+        Ok(None) => Response::error("Not found", 404),
+        Err(e) => Ok(e.to_response()),
+    }
+}
+
 /// GET /:cache/:path
 ///
 /// Returns narinfo for a store path.
@@ -98,6 +117,56 @@ pub async fn get_store_path_info(_req: Request, ctx: RouteContext<()>) -> Result
     headers.set("Content-Type", "text/x-nix-narinfo")?;
 
     Ok(Response::ok(narinfo)?.with_headers(headers))
+}
+
+/// HEAD /:cache/:path
+///
+/// Returns headers only for narinfo existence check.
+pub async fn head_store_path_info(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
+    let path = ctx.param("path").unwrap_or(&String::new()).clone();
+
+    // Check if this is a narinfo request
+    if !path.ends_with(".narinfo") {
+        return Response::error("Not found", 404);
+    }
+
+    // Extract store path hash from filename
+    let store_path_hash = path.trim_end_matches(".narinfo");
+    if store_path_hash.len() != 32 {
+        return Ok(WorkerError::BadRequest("Invalid store path hash".to_string()).to_response());
+    }
+
+    let state = match WorkerState::from_env(&ctx.env) {
+        Ok(s) => s,
+        Err(e) => return Ok(e.to_response()),
+    };
+
+    // Find the cache
+    match state.database.find_cache(&cache_name).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return Ok(
+                WorkerError::NotFound(format!("Cache not found: {}", cache_name)).to_response(),
+            )
+        }
+        Err(e) => return Ok(e.to_response()),
+    };
+
+    // Check if the object exists
+    match state
+        .database
+        .find_object(&cache_name, store_path_hash)
+        .await
+    {
+        Ok(Some(_)) => {
+            let mut headers = Headers::new();
+            headers.set("Content-Type", "text/x-nix-narinfo")?;
+            Ok(Response::empty()?.with_headers(headers))
+        }
+        Ok(None) => Response::error("Not found", 404),
+        Err(e) => Ok(e.to_response()),
+    }
 }
 
 /// GET /:cache/nar/:path
@@ -171,6 +240,63 @@ pub async fn get_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
         // TODO: Implement streaming for multi-chunk NARs
         Response::error("Multi-chunk NARs not yet supported", 501)
     }
+}
+
+/// HEAD /:cache/nar/:path
+///
+/// Returns headers only for NAR file existence check.
+pub async fn head_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let path = ctx.param("path").unwrap_or(&String::new()).clone();
+
+    // Extract NAR hash from path
+    let nar_hash_raw = path
+        .split('.')
+        .next()
+        .ok_or_else(|| worker::Error::RustError("Invalid NAR path".to_string()))?;
+
+    let state = match WorkerState::from_env(&ctx.env) {
+        Ok(s) => s,
+        Err(e) => return Ok(e.to_response()),
+    };
+
+    // Find the NAR
+    let nar_hash_with_prefix = format!("sha256:{}", nar_hash_raw);
+    let nar = match state
+        .database
+        .find_nar_by_hash(&nar_hash_with_prefix)
+        .await
+    {
+        Ok(Some(n)) => n,
+        Ok(None) => {
+            // Try without prefix as fallback
+            match state.database.find_nar_by_hash(nar_hash_raw).await {
+                Ok(Some(n)) => n,
+                Ok(None) => return Response::error("Not found", 404),
+                Err(e) => return Ok(e.to_response()),
+            }
+        }
+        Err(e) => return Ok(e.to_response()),
+    };
+
+    // Get chunk info for Content-Length
+    let nar_id = nar
+        .id
+        .ok_or_else(|| worker::Error::RustError("NAR has no ID".to_string()))?;
+    let chunks = state.database.find_chunks_for_nar(nar_id).await.ok();
+
+    let mut headers = Headers::new();
+    headers.set("Content-Type", "application/x-nix-nar")?;
+
+    // Set Content-Length if we have single chunk with file_size
+    if let Some(chunks) = &chunks {
+        if chunks.len() == 1 {
+            if let Some(file_size) = chunks[0].file_size {
+                headers.set("Content-Length", &file_size.to_string())?;
+            }
+        }
+    }
+
+    Ok(Response::empty()?.with_headers(headers))
 }
 
 /// Build a narinfo string from object, nar, and optional chunk data.

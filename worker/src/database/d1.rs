@@ -549,6 +549,31 @@ impl D1Backend {
 
         Ok(())
     }
+
+    /// Soft-delete a cache by setting deleted_at.
+    ///
+    /// Returns true if a cache was deleted, false if not found.
+    pub async fn delete_cache(&self, name: &str) -> WorkerResult<bool> {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let stmt = self
+            .db
+            .prepare("UPDATE cache SET deleted_at = ?1 WHERE name = ?2 AND deleted_at IS NULL")
+            .bind(&[now.into(), name.into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
+
+        let result = stmt
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        let meta = result
+            .meta()
+            .map_err(|e| WorkerError::Database(format!("Meta error: {}", e)))?;
+
+        let rows_affected = meta.and_then(|m| m.changes).unwrap_or(0) as u64;
+        Ok(rows_affected > 0)
+    }
 }
 
 // Row types for D1 deserialization

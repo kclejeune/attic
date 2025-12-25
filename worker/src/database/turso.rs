@@ -544,6 +544,25 @@ impl TursoBackend {
 
         Ok(())
     }
+
+    /// Soft-delete a cache by setting deleted_at.
+    ///
+    /// Returns true if a cache was deleted, false if not found.
+    pub async fn delete_cache(&self, name: &str) -> WorkerResult<bool> {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let result = self
+            .execute(
+                "UPDATE cache SET deleted_at = ? WHERE name = ? AND deleted_at IS NULL",
+                vec![
+                    serde_json::Value::String(now),
+                    serde_json::Value::String(name.to_string()),
+                ],
+            )
+            .await?;
+
+        Ok(result.rows_affected.unwrap_or(0) > 0)
+    }
 }
 
 /// Parse a cache row from query results.
