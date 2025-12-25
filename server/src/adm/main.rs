@@ -15,6 +15,8 @@ use command::make_token::{self, MakeToken};
 #[clap(propagate_version = true)]
 pub struct Opts {
     /// Path to the config file.
+    ///
+    /// Not required if --secret-base64 is provided for make-token.
     #[clap(short = 'f', long, global = true)]
     config: Option<PathBuf>,
 
@@ -31,7 +33,17 @@ pub enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opts = Opts::parse();
-    let config = config::load_config(opts.config.as_deref(), false).await?;
+
+    // For make-token with --secret-base64, config is optional
+    let needs_config = match &opts.command {
+        Command::MakeToken(sub) => sub.secret_base64.is_none() && !sub.dump_claims,
+    };
+
+    let config = if needs_config || opts.config.is_some() {
+        Some(config::load_config(opts.config.as_deref(), false).await?)
+    } else {
+        None
+    };
 
     match opts.command {
         Command::MakeToken(_) => make_token::run(config, opts).await?,

@@ -3,10 +3,11 @@ use chrono::{Duration as ChronoDuration, Utc};
 use clap::Parser;
 use humantime::Duration;
 
-use crate::Opts;
 use attic::cache::CacheNamePattern;
 use attic_server::access::Token;
 use attic_server::config::Config;
+use attic_token::{decode_token_hs256_secret_base64, SignatureType};
+use crate::Opts;
 
 /// Generate a new token.
 ///
@@ -15,8 +16,18 @@ use attic_server::config::Config;
 /// expiring in 2 years:
 ///
 /// $ atticadm make-token --sub "alice" --validity "2y" --pull "dev-*" --push "dev-*" --pull "prod"
+///
+/// You can also pass the secret directly without a config file:
+///
+/// $ atticadm make-token --secret-base64 "YOUR_SECRET" --sub "admin" --validity "1y" --pull "*" --push "*"
 #[derive(Debug, Parser)]
 pub struct MakeToken {
+    /// Base64-encoded HS256 secret for signing.
+    ///
+    /// If provided, the config file is not required.
+    #[clap(long, env = "ATTIC_SERVER_TOKEN_HS256_SECRET_BASE64")]
+    pub secret_base64: Option<String>,
+
     /// The subject of the JWT token.
     #[clap(long)]
     sub: String,
@@ -30,7 +41,7 @@ pub struct MakeToken {
 
     /// Dump the claims without signing and encoding it.
     #[clap(long)]
-    dump_claims: bool,
+    pub dump_claims: bool,
 
     /// A cache that the token may pull from.
     ///
@@ -91,7 +102,7 @@ macro_rules! grant_permissions {
     };
 }
 
-pub async fn run(config: Config, opts: Opts) -> Result<()> {
+pub async fn run(config: Option<Config>, opts: Opts) -> Result<()> {
     let sub = opts.command.as_make_token().unwrap();
     let duration = ChronoDuration::from_std(sub.validity.into())?;
     let exp = Utc::now()
@@ -115,13 +126,26 @@ pub async fn run(config: Config, opts: Opts) -> Result<()> {
     if sub.dump_claims {
         println!("{}", serde_json::to_string(token.opaque_claims())?);
     } else {
-        let signature_type = config.jwt.signing_config.into();
+        // Determine signature type: prefer direct secret, fall back to config
+        let (signature_type, bound_issuer, bound_audiences) = if let Some(ref secret) =
+            sub.secret_base64
+        {
+            let key = decode_token_hs256_secret_base64(secret)
+                .map_err(|e| anyhow!("Failed to decode secret: {}", e))?;
+            (SignatureType::HS256(key), None, None)
+        } else if let Some(config) = config {
+            (
+                config.jwt.signing_config.into(),
+                config.jwt.token_bound_issuer,
+                config.jwt.token_bound_audiences,
+            )
+        } else {
+            return Err(anyhow!(
+                "Either --secret-base64 or a config file with JWT signing configuration is required"
+            ));
+        };
 
-        let encoded_token = token.encode(
-            &signature_type,
-            &config.jwt.token_bound_issuer,
-            &config.jwt.token_bound_audiences,
-        )?;
+        let encoded_token = token.encode(&signature_type, &bound_issuer, &bound_audiences)?;
         println!("{}", encoded_token);
     }
 
