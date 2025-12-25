@@ -28,7 +28,6 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::compression::{CompressionStream, CompressorFn};
-use crate::config::CompressionType;
 use crate::error::{ErrorKind, ServerError, ServerResult};
 use crate::narinfo::Compression;
 use crate::storage::StorageBackend;
@@ -49,6 +48,10 @@ use crate::database::entity::chunkref::{self, Entity as ChunkRef};
 use crate::database::entity::nar::{self, Entity as Nar, NarState};
 use crate::database::entity::object::{self, Entity as Object, InsertExt};
 use crate::database::{AtticDatabase, ChunkGuard, NarGuard};
+
+
+};
+};
 
 /// Number of chunks to upload to the storage backend at once.
 ///
@@ -699,6 +702,8 @@ fn get_compressor_fn<C: AsyncBufRead + Unpin + Send + 'static>(
         }
         CompressionType::Zstd => Box::new(move |s| Box::new(ZstdEncoder::with_quality(s, level))),
         CompressionType::Xz => Box::new(move |s| Box::new(XzEncoder::with_quality(s, level))),
+        // Gzip and Bzip2 are not supported for server-side compression
+        CompressionType::Gzip | CompressionType::Bzip2 => Box::new(|c| Box::new(c)),
     }
 }
 

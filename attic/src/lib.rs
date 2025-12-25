@@ -19,6 +19,7 @@ pub mod api;
 pub mod cache;
 #[cfg(feature = "chunking")]
 pub mod chunking;
+pub mod compression;
 pub mod error;
 pub mod hash;
 #[cfg(feature = "io")]

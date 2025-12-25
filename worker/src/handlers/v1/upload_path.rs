@@ -599,8 +599,9 @@ async fn handle_streaming_compressed_upload(
                 }
             }
         }
-        CompressionType::Zstd | CompressionType::None => {
-            // Zstd/None: Use streaming compressor (zstd supports concatenated frames)
+        CompressionType::Zstd | CompressionType::None | CompressionType::Bzip2 => {
+            // Zstd/None/Bzip2: Use streaming compressor (zstd supports concatenated frames)
+            // Bzip2 falls back to no compression in the worker
             let mut compressor = StreamingCompressor::with_defaults(
                 compression_config.r#type,
                 CompressionLevel::Default,

@@ -341,20 +341,12 @@ pub async fn destroy_cache(req: Request, ctx: RouteContext<()>) -> Result<Respon
     }
 }
 
-/// Validate compression type string.
+/// Validate compression type string using the shared CompressionType.
 fn validate_compression(compression: &str) -> std::result::Result<String, String> {
-    match compression {
-        "none" | "zstd" | "br" | "brotli" | "gzip" | "gz" | "xz" | "lzma" => {
-            Ok(match compression {
-                "brotli" => "br".to_string(),
-                "gz" => "gzip".to_string(),
-                "lzma" => "xz".to_string(),
-                _ => compression.to_string(),
-            })
-        }
-        _ => Err(format!(
-            "Invalid compression type: {}. Valid options: none, zstd, br (brotli), gzip, xz",
-            compression
-        )),
-    }
+    use attic::compression::CompressionType;
+
+    compression
+        .parse::<CompressionType>()
+        .map(|ct| ct.as_str().to_string())
+        .map_err(|e| e.to_string())
 }

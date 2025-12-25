@@ -125,17 +125,10 @@ impl StreamingCompressor {
         match self.compression {
             CompressionType::None => Ok(input.to_vec()),
             CompressionType::Zstd => {
-                // Map compression level to zstd level (1-22)
-                let level = match self.level {
-                    CompressionLevel::Fastest => 1,
-                    CompressionLevel::Default => 3,
-                    CompressionLevel::Better => 9,
-                    CompressionLevel::Best => 19,
-                };
                 // Each chunk is compressed as an independent zstd frame.
                 // This is slightly less efficient than streaming compression
                 // but works with the WASM bindings we have.
-                super::js_zstd::compress(input, level)
+                super::js_zstd::compress(input, self.level.to_zstd_level())
             }
             CompressionType::Brotli => {
                 // Use streaming brotli compression
@@ -147,12 +140,7 @@ impl StreamingCompressor {
                 use flate2::write::GzEncoder;
                 use std::io::Write;
 
-                let level = match self.level {
-                    CompressionLevel::Fastest => flate2::Compression::fast(),
-                    CompressionLevel::Default => flate2::Compression::default(),
-                    CompressionLevel::Better => flate2::Compression::new(7),
-                    CompressionLevel::Best => flate2::Compression::best(),
-                };
+                let level = flate2::Compression::new(self.level.to_gzip_level());
 
                 let mut encoder = GzEncoder::new(Vec::new(), level);
                 encoder.write_all(input).map_err(|e| {
@@ -168,14 +156,7 @@ impl StreamingCompressor {
                 use lzma_rust2::{XzOptions, XzWriter};
                 use std::io::Write;
 
-                let preset = match self.level {
-                    CompressionLevel::Fastest => 1,
-                    CompressionLevel::Default => 6,
-                    CompressionLevel::Better => 7,
-                    CompressionLevel::Best => 9,
-                };
-
-                let options = XzOptions::with_preset(preset);
+                let options = XzOptions::with_preset(self.level.to_xz_preset());
 
                 let mut compressed = Vec::new();
                 {
@@ -192,6 +173,8 @@ impl StreamingCompressor {
 
                 Ok(compressed)
             }
+            // Bzip2 not supported for compression in worker
+            CompressionType::Bzip2 => Ok(input.to_vec()),
         }
     }
 
@@ -235,17 +218,9 @@ pub struct StreamingCompressionResult {
 /// than true streaming compression, it allows us to work with chunk-at-a-time
 /// processing which fits the multipart upload model.
 fn compress_brotli_chunk(input: &[u8], level: &CompressionLevel) -> WorkerResult<Vec<u8>> {
-    // Map compression level to brotli quality (0-11)
-    let quality = match level {
-        CompressionLevel::Fastest => 1,
-        CompressionLevel::Default => 4,
-        CompressionLevel::Better => 7,
-        CompressionLevel::Best => 11,
-    };
-
     let mut compressed = Vec::new();
     let params = brotli::enc::BrotliEncoderParams {
-        quality,
+        quality: level.to_brotli_quality(),
         lgwin: 22, // Window size (22 = 4MB)
         ..Default::default()
     };
@@ -368,17 +343,9 @@ impl Write for PartCollector {
 impl StatefulBrotliCompressor {
     /// Create a new stateful brotli compressor.
     pub fn new(level: CompressionLevel, target_part_size: usize) -> Self {
-        // Map compression level to brotli quality (0-11)
-        let quality = match level {
-            CompressionLevel::Fastest => 1,
-            CompressionLevel::Default => 4,
-            CompressionLevel::Better => 7,
-            CompressionLevel::Best => 11,
-        };
-
         let collector = PartCollector::new(target_part_size);
         let params = brotli::enc::BrotliEncoderParams {
-            quality,
+            quality: level.to_brotli_quality(),
             lgwin: 22, // Window size (22 = 4MB)
             ..Default::default()
         };
@@ -475,16 +442,11 @@ pub struct StatefulGzipCompressor {
 impl StatefulGzipCompressor {
     /// Create a new stateful gzip compressor.
     pub fn new(level: CompressionLevel, target_part_size: usize) -> Self {
-        // Map compression level to flate2 level (0-9)
-        let flate2_level = match level {
-            CompressionLevel::Fastest => flate2::Compression::fast(),
-            CompressionLevel::Default => flate2::Compression::default(),
-            CompressionLevel::Better => flate2::Compression::new(7),
-            CompressionLevel::Best => flate2::Compression::best(),
-        };
-
         let collector = PartCollector::new(target_part_size);
-        let encoder = flate2::write::GzEncoder::new(collector, flate2_level);
+        let encoder = flate2::write::GzEncoder::new(
+            collector,
+            flate2::Compression::new(level.to_gzip_level()),
+        );
 
         Self {
             encoder,
@@ -580,15 +542,7 @@ impl StatefulXzCompressor {
     pub fn new(level: CompressionLevel, target_part_size: usize) -> WorkerResult<Self> {
         use lzma_rust2::XzOptions;
 
-        // Map compression level to LZMA preset (0-9)
-        let preset = match level {
-            CompressionLevel::Fastest => 1,
-            CompressionLevel::Default => 6,
-            CompressionLevel::Better => 7,
-            CompressionLevel::Best => 9,
-        };
-
-        let options = XzOptions::with_preset(preset);
+        let options = XzOptions::with_preset(level.to_xz_preset());
 
         let collector = PartCollector::new(target_part_size);
         let encoder = lzma_rust2::XzWriter::new(collector, options)

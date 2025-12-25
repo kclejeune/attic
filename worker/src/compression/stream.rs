@@ -6,7 +6,7 @@
 
 use sha2::{Digest, Sha256};
 
-use super::config::{CompressionConfig, CompressionLevel, CompressionType};
+use super::config::{CompressionConfig, CompressionType};
 use crate::error::{WorkerError, WorkerResult};
 
 /// Result of a compression operation.
@@ -49,32 +49,14 @@ pub fn compress_buffer(
     // Compress data and track actual compression type used
     let (compressed, actual_compression) = match config.r#type {
         CompressionType::None => (input.to_vec(), CompressionType::None),
-        CompressionType::Zstd => {
-            // Map compression level to zstd level (1-22)
-            let level = match config.level {
-                CompressionLevel::Fastest => 1,
-                CompressionLevel::Default => 3,
-                CompressionLevel::Better => 9,
-                CompressionLevel::Best => 19,
-            };
-
-            (
-                super::js_zstd::compress(input, level)?,
-                CompressionType::Zstd,
-            )
-        }
+        CompressionType::Zstd => (
+            super::js_zstd::compress(input, config.level.to_zstd_level())?,
+            CompressionType::Zstd,
+        ),
         CompressionType::Brotli => {
-            // Map compression level to brotli quality (0-11)
-            let quality = match config.level {
-                CompressionLevel::Fastest => 1,
-                CompressionLevel::Default => 4,
-                CompressionLevel::Better => 7,
-                CompressionLevel::Best => 11,
-            };
-
             let mut compressed = Vec::new();
             let params = brotli::enc::BrotliEncoderParams {
-                quality,
+                quality: config.level.to_brotli_quality(),
                 lgwin: 22, // Window size (22 = 4MB)
                 ..Default::default()
             };
@@ -87,18 +69,13 @@ pub fn compress_buffer(
             (compressed, CompressionType::Brotli)
         }
         CompressionType::Gzip => {
-            // Map compression level to flate2 level (0-9)
-            let level = match config.level {
-                CompressionLevel::Fastest => flate2::Compression::fast(),
-                CompressionLevel::Default => flate2::Compression::default(),
-                CompressionLevel::Better => flate2::Compression::new(7),
-                CompressionLevel::Best => flate2::Compression::best(),
-            };
-
             use flate2::write::GzEncoder;
             use std::io::Write;
 
-            let mut encoder = GzEncoder::new(Vec::new(), level);
+            let mut encoder = GzEncoder::new(
+                Vec::new(),
+                flate2::Compression::new(config.level.to_gzip_level()),
+            );
             encoder.write_all(input).map_err(|e| {
                 WorkerError::Compression(format!("Gzip compression failed: {:?}", e))
             })?;
@@ -109,18 +86,10 @@ pub fn compress_buffer(
             (compressed, CompressionType::Gzip)
         }
         CompressionType::Xz => {
-            // Map compression level to LZMA preset (0-9)
-            let preset = match config.level {
-                CompressionLevel::Fastest => 1,
-                CompressionLevel::Default => 6,
-                CompressionLevel::Better => 7,
-                CompressionLevel::Best => 9,
-            };
-
             use lzma_rust2::{XzOptions, XzWriter};
             use std::io::Write;
 
-            let options = XzOptions::with_preset(preset);
+            let options = XzOptions::with_preset(config.level.to_xz_preset());
 
             let mut compressed = Vec::new();
             {
@@ -136,6 +105,8 @@ pub fn compress_buffer(
 
             (compressed, CompressionType::Xz)
         }
+        // Bzip2 not supported for compression in worker
+        CompressionType::Bzip2 => (input.to_vec(), CompressionType::None),
     };
 
     // Compute file hash (hash of compressed data)

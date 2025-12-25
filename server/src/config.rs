@@ -20,6 +20,11 @@ use crate::access::{
 use crate::narinfo::Compression as NixCompression;
 use crate::storage::{LocalStorageConfig, S3StorageConfig};
 
+use attic::compression::CompressionType;
+
+//! Server configuration.
+};
+
 /// Application prefix in XDG base directories.
 ///
 /// This will be concatenated into `$XDG_CONFIG_HOME/attic`.
@@ -273,6 +278,7 @@ pub struct ChunkingConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CompressionConfig {
     /// Compression type.
+    #[serde(deserialize_with = "deserialize_compression_type")]
     pub r#type: CompressionType,
 
     /// Compression level.
@@ -281,26 +287,14 @@ pub struct CompressionConfig {
     pub level: Option<i32>,
 }
 
-/// Compression type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub enum CompressionType {
-    /// No compression.
-    #[serde(rename = "none")]
-    None,
-
-    /// Brotli.
-    #[serde(rename = "brotli")]
-    Brotli,
-
-    /// ZSTD.
-    #[serde(rename = "zstd")]
-    Zstd,
-
-    /// XZ.
-    #[serde(rename = "xz")]
-    Xz,
+/// Custom deserializer that handles both old ("brotli") and new ("br") names.
+fn deserialize_compression_type<'de, D>(deserializer: D) -> Result<CompressionType, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    s.parse().map_err(de::Error::custom)
 }
-
 /// Garbage collection config.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GarbageCollectionConfig {
@@ -461,6 +455,8 @@ impl From<CompressionType> for NixCompression {
             CompressionType::Brotli => NixCompression::Brotli,
             CompressionType::Zstd => NixCompression::Zstd,
             CompressionType::Xz => NixCompression::Xz,
+            CompressionType::Gzip => NixCompression::None, // Gzip not supported in server narinfo
+            CompressionType::Bzip2 => NixCompression::Bzip2,
         }
     }
 }
