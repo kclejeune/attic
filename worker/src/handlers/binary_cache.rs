@@ -261,11 +261,7 @@ pub async fn head_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> 
 
     // Find the NAR
     let nar_hash_with_prefix = format!("sha256:{}", nar_hash_raw);
-    let nar = match state
-        .database
-        .find_nar_by_hash(&nar_hash_with_prefix)
-        .await
-    {
+    let nar = match state.database.find_nar_by_hash(&nar_hash_with_prefix).await {
         Ok(Some(n)) => n,
         Ok(None) => {
             // Try without prefix as fallback

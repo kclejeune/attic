@@ -334,9 +334,9 @@ pub async fn destroy_cache(req: Request, ctx: RouteContext<()>) -> Result<Respon
             });
             Response::from_json(&response)
         }
-        Ok(false) => Ok(
-            WorkerError::NotFound(format!("Cache not found: {}", cache_name)).to_response(),
-        ),
+        Ok(false) => {
+            Ok(WorkerError::NotFound(format!("Cache not found: {}", cache_name)).to_response())
+        }
         Err(e) => Ok(e.to_response()),
     }
 }
@@ -344,13 +344,16 @@ pub async fn destroy_cache(req: Request, ctx: RouteContext<()>) -> Result<Respon
 /// Validate compression type string.
 fn validate_compression(compression: &str) -> std::result::Result<String, String> {
     match compression {
-        "none" | "zstd" | "br" | "brotli" | "gzip" | "gz" => Ok(match compression {
-            "brotli" => "br".to_string(),
-            "gz" => "gzip".to_string(),
-            _ => compression.to_string(),
-        }),
+        "none" | "zstd" | "br" | "brotli" | "gzip" | "gz" | "xz" | "lzma" => {
+            Ok(match compression {
+                "brotli" => "br".to_string(),
+                "gz" => "gzip".to_string(),
+                "lzma" => "xz".to_string(),
+                _ => compression.to_string(),
+            })
+        }
         _ => Err(format!(
-            "Invalid compression type: {}. Valid options: none, zstd, br (brotli), gzip",
+            "Invalid compression type: {}. Valid options: none, zstd, br (brotli), gzip, xz",
             compression
         )),
     }

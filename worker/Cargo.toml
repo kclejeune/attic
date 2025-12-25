@@ -50,6 +50,7 @@ getrandom = { version = "0.2", features = ["js"] }
 # Compression (WASM-compatible)
 brotli = "7.0"
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+lzma-rust2 = { version = "0.15", default-features = false, features = ["encoder", "xz", "std"] }
 # zstd uses @yu7400ki/zstd-wasm via JS bindings (has explicit Workers support)
 
 # Ed25519 keypair generation and signing (WASM-compatible)

@@ -108,6 +108,34 @@ pub fn compress_buffer(
 
             (compressed, CompressionType::Gzip)
         }
+        CompressionType::Xz => {
+            // Map compression level to LZMA preset (0-9)
+            let preset = match config.level {
+                CompressionLevel::Fastest => 1,
+                CompressionLevel::Default => 6,
+                CompressionLevel::Better => 7,
+                CompressionLevel::Best => 9,
+            };
+
+            use lzma_rust2::{XzOptions, XzWriter};
+            use std::io::Write;
+
+            let options = XzOptions::with_preset(preset);
+
+            let mut compressed = Vec::new();
+            {
+                let mut encoder = XzWriter::new(&mut compressed, options)
+                    .map_err(|e| WorkerError::Compression(format!("XZ init failed: {:?}", e)))?;
+                encoder.write_all(input).map_err(|e| {
+                    WorkerError::Compression(format!("XZ compression failed: {:?}", e))
+                })?;
+                encoder
+                    .finish()
+                    .map_err(|e| WorkerError::Compression(format!("XZ finish failed: {:?}", e)))?;
+            }
+
+            (compressed, CompressionType::Xz)
+        }
     };
 
     // Compute file hash (hash of compressed data)

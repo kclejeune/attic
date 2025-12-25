@@ -162,6 +162,36 @@ impl StreamingCompressor {
                     WorkerError::Compression(format!("Gzip finish failed: {:?}", e))
                 })?)
             }
+            CompressionType::Xz => {
+                // Note: XZ streaming should use StatefulXzCompressor instead.
+                // This is a fallback for small files using buffered compression.
+                use lzma_rust2::{XzOptions, XzWriter};
+                use std::io::Write;
+
+                let preset = match self.level {
+                    CompressionLevel::Fastest => 1,
+                    CompressionLevel::Default => 6,
+                    CompressionLevel::Better => 7,
+                    CompressionLevel::Best => 9,
+                };
+
+                let options = XzOptions::with_preset(preset);
+
+                let mut compressed = Vec::new();
+                {
+                    let mut encoder = XzWriter::new(&mut compressed, options).map_err(|e| {
+                        WorkerError::Compression(format!("XZ init failed: {:?}", e))
+                    })?;
+                    encoder.write_all(input).map_err(|e| {
+                        WorkerError::Compression(format!("XZ compression failed: {:?}", e))
+                    })?;
+                    encoder.finish().map_err(|e| {
+                        WorkerError::Compression(format!("XZ finish failed: {:?}", e))
+                    })?;
+                }
+
+                Ok(compressed)
+            }
         }
     }
 
@@ -516,6 +546,114 @@ impl StatefulGzipCompressor {
 
 /// Result of finishing a stateful gzip compression.
 pub struct StatefulGzipResult {
+    /// Remaining data in the buffer (last part, may be < 5MB).
+    pub remaining_data: Vec<u8>,
+
+    /// SHA256 hash of all compressed data (hex-encoded).
+    pub file_hash: String,
+
+    /// Total size of all compressed data.
+    pub total_size: u64,
+}
+
+/// Stateful streaming XZ/LZMA2 compressor.
+///
+/// Similar to `StatefulBrotliCompressor`, this maintains XZ compression state
+/// across all input chunks, producing a single valid XZ stream.
+///
+/// XZ does not support concatenated streams - each XZ file must be a complete
+/// stream with proper header and footer. Using a stateful compressor ensures
+/// we produce a valid, decompressable output.
+pub struct StatefulXzCompressor {
+    /// The XZ encoder wrapping our part collector.
+    encoder: lzma_rust2::XzWriter<PartCollector>,
+
+    /// Hash of compressed data (computed from parts as they're extracted).
+    hasher: Sha256,
+
+    /// Total compressed bytes produced so far (in completed parts).
+    total_size: u64,
+}
+
+impl StatefulXzCompressor {
+    /// Create a new stateful XZ compressor.
+    pub fn new(level: CompressionLevel, target_part_size: usize) -> WorkerResult<Self> {
+        use lzma_rust2::XzOptions;
+
+        // Map compression level to LZMA preset (0-9)
+        let preset = match level {
+            CompressionLevel::Fastest => 1,
+            CompressionLevel::Default => 6,
+            CompressionLevel::Better => 7,
+            CompressionLevel::Best => 9,
+        };
+
+        let options = XzOptions::with_preset(preset);
+
+        let collector = PartCollector::new(target_part_size);
+        let encoder = lzma_rust2::XzWriter::new(collector, options)
+            .map_err(|e| WorkerError::Compression(format!("XZ init failed: {:?}", e)))?;
+
+        Ok(Self {
+            encoder,
+            hasher: Sha256::new(),
+            total_size: 0,
+        })
+    }
+
+    /// Create with default target part size.
+    pub fn with_defaults(level: CompressionLevel) -> WorkerResult<Self> {
+        Self::new(level, TARGET_PART_SIZE)
+    }
+
+    /// Compress a chunk of input data.
+    ///
+    /// Returns any parts that are ready for upload (exactly target_part_size bytes each).
+    pub fn compress_chunk(&mut self, input: &[u8]) -> WorkerResult<Vec<Vec<u8>>> {
+        // Write input to the encoder
+        self.encoder
+            .write_all(input)
+            .map_err(|e| WorkerError::Compression(format!("XZ compression failed: {:?}", e)))?;
+
+        // Extract any ready parts
+        let parts = self.encoder.inner_mut().take_ready_parts();
+
+        // Update hash and size for each part
+        for part in &parts {
+            self.hasher.update(part);
+            self.total_size += part.len() as u64;
+        }
+
+        Ok(parts)
+    }
+
+    /// Finish compression and return remaining data plus hash.
+    pub fn finish(self) -> WorkerResult<StatefulXzResult> {
+        // Finish the encoder to flush all remaining data and write XZ footer
+        let collector = self
+            .encoder
+            .finish()
+            .map_err(|e| WorkerError::Compression(format!("XZ finish failed: {:?}", e)))?;
+
+        let remaining_data = collector.take_remaining();
+
+        // Update hash with remaining data
+        let mut hasher = self.hasher;
+        hasher.update(&remaining_data);
+        let file_hash = hex::encode(hasher.finalize());
+
+        let remaining_size = remaining_data.len() as u64;
+
+        Ok(StatefulXzResult {
+            remaining_data,
+            file_hash,
+            total_size: self.total_size + remaining_size,
+        })
+    }
+}
+
+/// Result of finishing a stateful XZ compression.
+pub struct StatefulXzResult {
     /// Remaining data in the buffer (last part, may be < 5MB).
     pub remaining_data: Vec<u8>,
 

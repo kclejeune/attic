@@ -518,6 +518,87 @@ async fn handle_streaming_compressed_upload(
                 }
             }
         }
+        CompressionType::Xz => {
+            // XZ requires stateful compression (doesn't support concatenated streams)
+            let mut compressor = match crate::compression::StatefulXzCompressor::with_defaults(
+                CompressionLevel::Default,
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = multipart.abort().await;
+                    return Ok(e.to_response());
+                }
+            };
+
+            // Process stream in chunks
+            loop {
+                let read_result = JsFuture::from(reader.read())
+                    .await
+                    .map_err(|e| worker::Error::RustError(format!("Stream read error: {:?}", e)))?;
+
+                let done =
+                    js_sys::Reflect::get(&read_result, &wasm_bindgen::JsValue::from_str("done"))
+                        .map_err(|e| {
+                            worker::Error::RustError(format!("Failed to get done: {:?}", e))
+                        })?
+                        .as_bool()
+                        .unwrap_or(true);
+
+                if done {
+                    break;
+                }
+
+                let value =
+                    js_sys::Reflect::get(&read_result, &wasm_bindgen::JsValue::from_str("value"))
+                        .map_err(|e| {
+                        worker::Error::RustError(format!("Failed to get value: {:?}", e))
+                    })?;
+
+                if value.is_undefined() {
+                    break;
+                }
+
+                let array = js_sys::Uint8Array::new(&value);
+                let chunk = array.to_vec();
+
+                if chunk.is_empty() {
+                    continue;
+                }
+
+                // Update NAR hash
+                nar_hasher.update(&chunk);
+
+                // Compress chunk - may return multiple parts
+                match compressor.compress_chunk(&chunk) {
+                    Ok(parts) => {
+                        for part_data in parts {
+                            if let Err(e) = multipart.upload_part(part_data).await {
+                                let _ = multipart.abort().await;
+                                return Ok(e.to_response());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = multipart.abort().await;
+                        return Ok(e.to_response());
+                    }
+                }
+            }
+
+            // Finish compression
+            match compressor.finish() {
+                Ok(result) => (
+                    result.remaining_data,
+                    result.file_hash,
+                    result.total_size,
+                    "xz".to_string(),
+                ),
+                Err(e) => {
+                    let _ = multipart.abort().await;
+                    return Ok(e.to_response());
+                }
+            }
+        }
         CompressionType::Zstd | CompressionType::None => {
             // Zstd/None: Use streaming compressor (zstd supports concatenated frames)
             let mut compressor = StreamingCompressor::with_defaults(

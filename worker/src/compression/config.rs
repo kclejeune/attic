@@ -25,6 +25,12 @@ pub enum CompressionType {
     /// Uses native CompressionStream API for streaming large files.
     #[serde(rename = "gzip")]
     Gzip,
+
+    /// XZ/LZMA2 compression.
+    /// Pure Rust implementation via lzma-rust2.
+    /// Compatible with original attic server's xz compression.
+    #[serde(rename = "xz")]
+    Xz,
 }
 
 impl CompressionType {
@@ -35,6 +41,7 @@ impl CompressionType {
             CompressionType::Zstd => "zstd",
             CompressionType::Brotli => "br",
             CompressionType::Gzip => "gzip",
+            CompressionType::Xz => "xz",
         }
     }
 
@@ -45,6 +52,7 @@ impl CompressionType {
             CompressionType::Zstd => ".zst",
             CompressionType::Brotli => ".br",
             CompressionType::Gzip => ".gz",
+            CompressionType::Xz => ".xz",
         }
     }
 }
@@ -97,6 +105,7 @@ impl CompressionConfig {
             "zst" | "zstd" => CompressionType::Zstd,
             "br" | "brotli" => CompressionType::Brotli,
             "gz" | "gzip" => CompressionType::Gzip,
+            "xz" | "lzma" => CompressionType::Xz,
             _ => CompressionType::Brotli, // Default to brotli for unknown
         };
         Self {

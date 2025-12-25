@@ -127,23 +127,22 @@ pub async fn run(config: Option<Config>, opts: Opts) -> Result<()> {
         println!("{}", serde_json::to_string(token.opaque_claims())?);
     } else {
         // Determine signature type: prefer direct secret, fall back to config
-        let (signature_type, bound_issuer, bound_audiences) = if let Some(ref secret) =
-            sub.secret_base64
-        {
-            let key = decode_token_hs256_secret_base64(secret)
-                .map_err(|e| anyhow!("Failed to decode secret: {}", e))?;
-            (SignatureType::HS256(key), None, None)
-        } else if let Some(config) = config {
-            (
-                config.jwt.signing_config.into(),
-                config.jwt.token_bound_issuer,
-                config.jwt.token_bound_audiences,
-            )
-        } else {
-            return Err(anyhow!(
+        let (signature_type, bound_issuer, bound_audiences) =
+            if let Some(ref secret) = sub.secret_base64 {
+                let key = decode_token_hs256_secret_base64(secret)
+                    .map_err(|e| anyhow!("Failed to decode secret: {}", e))?;
+                (SignatureType::HS256(key), None, None)
+            } else if let Some(config) = config {
+                (
+                    config.jwt.signing_config.into(),
+                    config.jwt.token_bound_issuer,
+                    config.jwt.token_bound_audiences,
+                )
+            } else {
+                return Err(anyhow!(
                 "Either --secret-base64 or a config file with JWT signing configuration is required"
             ));
-        };
+            };
 
         let encoded_token = token.encode(&signature_type, &bound_issuer, &bound_audiences)?;
         println!("{}", encoded_token);

@@ -21,5 +21,6 @@ mod streaming;
 pub use config::{CompressionConfig, CompressionLevel, CompressionType};
 pub use stream::compress_buffer;
 pub use streaming::{
-    NarHasher, StatefulBrotliCompressor, StatefulGzipCompressor, StreamingCompressor,
+    NarHasher, StatefulBrotliCompressor, StatefulGzipCompressor, StatefulXzCompressor,
+    StreamingCompressor,
 };
