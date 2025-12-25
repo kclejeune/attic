@@ -94,3 +94,100 @@ pub enum UploadPathResultKind {
     /// is opaque to the client.
     Deduplicated,
 }
+
+// =============================================================================
+// Chunked Upload Types
+// =============================================================================
+// For files larger than Cloudflare's 100MB request limit, we use a chunked
+// upload protocol:
+//
+// 1. POST /_api/v1/upload-path/start - Start chunked upload, get upload token
+// 2. PUT /_api/v1/upload-path/chunk - Upload chunks (< 50MB each)
+// 3. POST /_api/v1/upload-path/complete - Complete the upload
+
+/// Maximum recommended chunk size (50MB to stay under worker memory limits).
+/// Cloudflare Workers have a 128MB memory limit, and we need headroom for
+/// request processing, so we use 50MB chunks to balance throughput and safety.
+pub const CHUNKED_UPLOAD_CHUNK_SIZE: usize = 50 * 1024 * 1024;
+
+/// Threshold for using chunked uploads (100MB NAR size).
+/// Files larger than this will be uploaded in chunks.
+pub const CHUNKED_UPLOAD_THRESHOLD: usize = 100 * 1024 * 1024;
+
+/// Request body for starting a chunked upload.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StartChunkedUploadRequest {
+    /// NAR info for the upload.
+    pub nar_info: ChunkedNarInfo,
+    /// Expected total NAR size (uncompressed).
+    pub nar_size: u64,
+}
+
+/// NAR info for chunked uploads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkedNarInfo {
+    pub cache: CacheName,
+    pub store_path_hash: StorePathHash,
+    pub store_path: String,
+    pub references: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deriver: Option<String>,
+    pub sigs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca: Option<String>,
+    pub nar_hash: Hash,
+}
+
+/// Response for starting a chunked upload.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StartChunkedUploadResponse {
+    /// Opaque upload token.
+    pub upload_token: String,
+    /// Recommended chunk size.
+    pub chunk_size: u64,
+}
+
+/// Result of starting a chunked upload - either proceed with upload or already deduplicated.
+#[derive(Debug)]
+pub enum StartChunkedUploadResult {
+    /// Proceed with chunked upload using this token.
+    Proceed(StartChunkedUploadResponse),
+    /// NAR was deduplicated, upload complete.
+    Deduplicated(UploadPathResult),
+}
+
+/// Response for uploading a chunk.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChunkUploadResponse {
+    /// Updated upload token (must be used for subsequent chunks).
+    pub upload_token: String,
+    /// Number of parts uploaded so far.
+    pub parts_uploaded: u16,
+    /// Total bytes received (compressed).
+    pub bytes_received: u64,
+}
+
+/// Request body for completing a chunked upload.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CompleteChunkedUploadRequest {
+    /// Upload token from the last chunk upload.
+    pub upload_token: String,
+}
+
+impl From<&UploadPathNarInfo> for ChunkedNarInfo {
+    fn from(info: &UploadPathNarInfo) -> Self {
+        Self {
+            cache: info.cache.clone(),
+            store_path_hash: info.store_path_hash.clone(),
+            store_path: info.store_path.clone(),
+            references: info.references.clone(),
+            system: info.system.clone(),
+            deriver: info.deriver.clone(),
+            sigs: info.sigs.clone(),
+            ca: info.ca.clone(),
+            nar_hash: info.nar_hash.clone(),
+        }
+    }
+}

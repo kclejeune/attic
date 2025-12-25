@@ -21,9 +21,17 @@ use attic::api::v1::cache_config::{CacheConfig, CreateCacheRequest};
 use attic::api::v1::get_missing_paths::{GetMissingPathsRequest, GetMissingPathsResponse};
 use attic::api::v1::upload_path::{
     ATTIC_NAR_INFO, ATTIC_NAR_INFO_PREAMBLE_SIZE, UploadPathNarInfo, UploadPathResult,
+    ATTIC_NAR_INFO, ATTIC_NAR_INFO_PREAMBLE_SIZE,
+    StartChunkedUploadResponse, StartChunkedUploadResult, UploadPathNarInfo, UploadPathResult,
+    ChunkUploadResponse, ChunkedNarInfo, CompleteChunkedUploadRequest, StartChunkedUploadRequest,
 };
 use attic::cache::CacheName;
 use attic::nix_store::StorePathHash;
+
+
+};
+};
+};
 
 /// The User-Agent string of Attic.
 const ATTIC_USER_AGENT: &str =
@@ -206,6 +214,92 @@ impl ApiClient {
                 Ok(r) => Ok(Some(r)),
                 Err(_) => Ok(None),
             }
+        } else {
+            let api_error = ApiError::try_from_response(res).await?;
+            Err(api_error.into())
+        }
+    }
+
+    /// Starts a chunked upload for large files.
+    ///
+    /// Returns either an upload token (proceed with chunked upload) or
+    /// a deduplicated result (NAR already exists, upload complete).
+    pub async fn start_chunked_upload(
+        &self,
+        nar_info: &UploadPathNarInfo,
+    ) -> Result<StartChunkedUploadResult> {
+        use attic::api::v1::upload_path::StartChunkedUploadResult;
+
+        let endpoint = self.endpoint.join("_api/v1/upload-path/start")?;
+        let request = StartChunkedUploadRequest {
+            nar_info: ChunkedNarInfo::from(nar_info),
+            nar_size: nar_info.nar_size as u64,
+        };
+
+        let res = self.client.post(endpoint).json(&request).send().await?;
+
+        if res.status().is_success() {
+            // Try to parse as StartChunkedUploadResponse first
+            let body = res.text().await?;
+            if let Ok(response) = serde_json::from_str::<StartChunkedUploadResponse>(&body) {
+                Ok(StartChunkedUploadResult::Proceed(response))
+            } else if let Ok(result) = serde_json::from_str::<UploadPathResult>(&body) {
+                // Deduplicated - no upload needed
+                Ok(StartChunkedUploadResult::Deduplicated(result))
+            } else {
+                Err(anyhow::anyhow!(
+                    "Failed to parse chunked upload response: {}",
+                    body
+                ))
+            }
+        } else {
+            let api_error = ApiError::try_from_response(res).await?;
+            Err(api_error.into())
+        }
+    }
+
+    /// Uploads a chunk of data for a chunked upload.
+    ///
+    /// The chunk data should be pre-compressed. Returns an updated upload token
+    /// that must be used for the next chunk or completion.
+    pub async fn upload_chunk(
+        &self,
+        upload_token: &str,
+        part_number: u16,
+        data: Vec<u8>,
+    ) -> Result<ChunkUploadResponse> {
+        let endpoint = self.endpoint.join("_api/v1/upload-path/chunk")?;
+
+        let res = self
+            .client
+            .put(endpoint)
+            .header("X-Upload-Token", upload_token)
+            .header("X-Part-Number", part_number.to_string())
+            .body(data)
+            .send()
+            .await?;
+
+        if res.status().is_success() {
+            let response = res.json().await?;
+            Ok(response)
+        } else {
+            let api_error = ApiError::try_from_response(res).await?;
+            Err(api_error.into())
+        }
+    }
+
+    /// Completes a chunked upload.
+    pub async fn complete_chunked_upload(&self, upload_token: &str) -> Result<UploadPathResult> {
+        let endpoint = self.endpoint.join("_api/v1/upload-path/complete")?;
+        let request = CompleteChunkedUploadRequest {
+            upload_token: upload_token.to_string(),
+        };
+
+        let res = self.client.post(endpoint).json(&request).send().await?;
+
+        if res.status().is_success() {
+            let response = res.json().await?;
+            Ok(response)
         } else {
             let api_error = ApiError::try_from_response(res).await?;
             Err(api_error.into())

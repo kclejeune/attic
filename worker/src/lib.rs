@@ -76,6 +76,16 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             v1::get_missing_paths::get_missing_paths,
         )
         .put_async("/_api/v1/upload-path", v1::upload_path::upload_path)
+        // Chunked upload endpoints for large files (>100MB)
+        .post_async(
+            "/_api/v1/upload-path/start",
+            v1::upload_path::start_chunked_upload,
+        )
+        .put_async("/_api/v1/upload-path/chunk", v1::upload_path::upload_chunk)
+        .post_async(
+            "/_api/v1/upload-path/complete",
+            v1::upload_path::complete_chunked_upload,
+        )
         .run(req, env)
         .await
 }

@@ -34,7 +34,9 @@ use tokio::time;
 
 use crate::api::ApiClient;
 use attic::api::v1::cache_config::CacheConfig;
-use attic::api::v1::upload_path::{UploadPathNarInfo, UploadPathResult, UploadPathResultKind};
+use attic::api::v1::upload_path::{
+    UploadPathNarInfo, UploadPathResult, UploadPathResultKind, CHUNKED_UPLOAD_THRESHOLD,
+};
 use attic::cache::CacheName;
 use attic::error::AtticResult;
 use attic::nix_store::{NixStore, StorePath, StorePathHash, ValidPathInfo};
@@ -560,22 +562,35 @@ pub async fn upload_path(
 
     let start = Instant::now();
 
-    // Upload uncompressed NAR - server handles compression
-    let nar_stream = NarStreamProgress::new(store.nar_from_path(path.to_owned()), bar.clone())
-        .map_ok(Bytes::from);
+    // For large files, use chunked upload to avoid Cloudflare's 100MB limit
+    let result = if path_info.nar_size as usize > CHUNKED_UPLOAD_THRESHOLD {
+        upload_path_chunked(
+            path.clone(),
+            path_info.nar_size,
+            upload_info,
+            store,
+            api,
+            bar.clone(),
+        )
+        .await
+    } else {
+        // Upload uncompressed NAR - server handles compression
+        let nar_stream = NarStreamProgress::new(store.nar_from_path(path.to_owned()), bar.clone())
+            .map_ok(Bytes::from);
 
-    let result = api
-        .upload_path(upload_info, nar_stream, force_preamble)
-        .await;
+        api.upload_path(upload_info, nar_stream, force_preamble)
+            .await
+            .map(|r| {
+                r.unwrap_or(UploadPathResult {
+                    kind: UploadPathResultKind::Uploaded,
+                    file_size: None,
+                    frac_deduplicated: None,
+                })
+            })
+    };
 
     match result {
         Ok(r) => {
-            let r = r.unwrap_or(UploadPathResult {
-                kind: UploadPathResultKind::Uploaded,
-                file_size: None,
-                frac_deduplicated: None,
-            });
-
             let info_string: String = match r.kind {
                 UploadPathResultKind::Deduplicated => "deduplicated".to_string(),
                 _ => {
@@ -614,6 +629,70 @@ pub async fn upload_path(
             Err(e)
         }
     }
+}
+
+/// Uploads a large path using the chunked upload protocol.
+///
+/// This is used for paths larger than ~95MB to avoid Cloudflare's 100MB request limit.
+/// The NAR is compressed with zstd and split into chunks for upload.
+async fn upload_path_chunked(
+    path: StorePath,
+    nar_size: u64,
+    upload_info: UploadPathNarInfo,
+    store: Arc<NixStore>,
+    api: ApiClient,
+    bar: ProgressBar,
+) -> Result<UploadPathResult> {
+    use attic::api::v1::upload_path::StartChunkedUploadResult;
+    use zstd::stream::encode_all;
+
+    // Start chunked upload - may return early if deduplicated
+    let start_result = api.start_chunked_upload(&upload_info).await?;
+
+    let (upload_token, chunk_size) = match start_result {
+        StartChunkedUploadResult::Proceed(response) => {
+            (response.upload_token, response.chunk_size as usize)
+        }
+        StartChunkedUploadResult::Deduplicated(result) => {
+            // NAR already exists, no upload needed
+            return Ok(result);
+        }
+    };
+
+    let mut upload_token = upload_token;
+
+    // Collect the NAR data (we need to buffer it for compression)
+    let nar_stream = store.nar_from_path(path);
+    let mut nar_data = Vec::with_capacity(nar_size as usize);
+
+    tokio::pin!(nar_stream);
+    while let Some(chunk) = nar_stream.try_next().await? {
+        bar.inc(chunk.len() as u64);
+        nar_data.extend_from_slice(&chunk);
+    }
+
+    // Compress the NAR with zstd (level 3 is a good balance)
+    let compressed_data =
+        encode_all(&nar_data[..], 3).map_err(|e| anyhow!("Failed to compress NAR: {}", e))?;
+
+    // Reset progress bar for upload phase
+    bar.set_position(0);
+    bar.set_length(compressed_data.len() as u64);
+
+    // Split into chunks and upload
+    let mut part_number: u16 = 1;
+    for chunk in compressed_data.chunks(chunk_size) {
+        let response = api
+            .upload_chunk(&upload_token, part_number, chunk.to_vec())
+            .await?;
+        upload_token = response.upload_token;
+        part_number += 1;
+        bar.inc(chunk.len() as u64);
+    }
+
+    // Complete the upload
+    let result = api.complete_chunked_upload(&upload_token).await?;
+    Ok(result)
 }
 
 impl<S: Stream<Item = AtticResult<Vec<u8>>>> NarStreamProgress<S> {

@@ -150,7 +150,7 @@ pub async fn get_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     }
 
     if chunks.len() == 1 {
-        // Single chunk - redirect to R2
+        // Single chunk - stream from R2
         let chunk = &chunks[0];
         let remote_file: serde_json::Value = serde_json::from_str(&chunk.remote_file)
             .map_err(|e| worker::Error::RustError(format!("Invalid remote file: {}", e)))?;
@@ -161,21 +161,9 @@ pub async fn get_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
             .and_then(|v| v.as_str())
             .ok_or_else(|| worker::Error::RustError("No key in remote file".to_string()))?;
 
-        // Download and return the file
-        match state.storage.download_file(key).await {
-            Ok(crate::storage::Download::Bytes(bytes)) => {
-                let mut headers = Headers::new();
-                headers.set("Content-Type", "application/x-nix-nar")?;
-                if let Some(file_size) = chunk.file_size {
-                    headers.set("Content-Length", &file_size.to_string())?;
-                }
-                Ok(Response::from_bytes(bytes.to_vec())?.with_headers(headers))
-            }
-            Ok(crate::storage::Download::Url(url)) => Response::redirect_with_status(
-                Url::parse(&url)
-                    .map_err(|e| worker::Error::RustError(format!("Invalid URL: {}", e)))?,
-                302,
-            ),
+        // Stream the file directly from R2 (doesn't load entire file into memory)
+        match state.storage.download_file_stream(key).await {
+            Ok(response) => Ok(response),
             Err(e) => Ok(e.to_response()),
         }
     } else {

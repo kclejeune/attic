@@ -282,6 +282,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "xdg",
+ "zstd",
 ]
 
 [[package]]

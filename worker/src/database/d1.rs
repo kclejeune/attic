@@ -400,39 +400,65 @@ impl D1Backend {
     }
 
     /// Find which store path hashes already exist in a cache.
+    ///
+    /// Uses batched queries with SQL IN clauses to avoid exceeding D1's
+    /// query limit per worker invocation (~1000 queries).
     pub async fn find_existing_paths(
         &self,
         cache_name: &str,
         hashes: &[String],
     ) -> WorkerResult<Vec<String>> {
+        use worker::wasm_bindgen::JsValue;
+
         if hashes.is_empty() {
             return Ok(Vec::new());
         }
 
-        // D1 doesn't support dynamic IN clauses well, so we'll do multiple queries
-        // For efficiency, we could batch them, but for now let's keep it simple
+        // D1 has a limit of 100 bind parameters per query.
+        // Reserve 1 for cache_name, so we can use up to 99 hashes per batch.
+        const BATCH_SIZE: usize = 99;
+
         let mut existing = Vec::new();
 
-        for hash in hashes {
+        for batch in hashes.chunks(BATCH_SIZE) {
+            // Build placeholders for IN clause: ?2, ?3, ?4, ...
+            let placeholders: Vec<String> =
+                (2..=batch.len() + 1).map(|i| format!("?{}", i)).collect();
+            let placeholders_str = placeholders.join(", ");
+
+            let query = format!(
+                "SELECT o.store_path_hash FROM object o \
+                 INNER JOIN cache c ON o.cache_id = c.id \
+                 INNER JOIN nar n ON o.nar_id = n.id \
+                 WHERE c.name = ?1 AND c.deleted_at IS NULL \
+                 AND n.state = 'V' \
+                 AND o.store_path_hash IN ({})",
+                placeholders_str
+            );
+
+            // Build params: cache_name first, then all hashes in this batch
+            let mut params: Vec<JsValue> = Vec::with_capacity(batch.len() + 1);
+            params.push(cache_name.into());
+            for hash in batch {
+                params.push(hash.clone().into());
+            }
+
             let stmt = self
                 .db
-                .prepare(
-                    "SELECT o.store_path_hash FROM object o \
-                     INNER JOIN cache c ON o.cache_id = c.id \
-                     INNER JOIN nar n ON o.nar_id = n.id \
-                     WHERE c.name = ?1 AND c.deleted_at IS NULL \
-                     AND n.state = 'V' \
-                     AND o.store_path_hash = ?2",
-                )
-                .bind(&[cache_name.into(), hash.clone().into()])
+                .prepare(&query)
+                .bind(&params)
                 .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
 
-            let result = stmt
-                .first::<PathHashRow>(None)
+            let results = stmt
+                .all()
                 .await
                 .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
 
-            if let Some(row) = result {
+            let rows: Vec<PathHashRow> = results
+                .results()
+                .map_err(|e| WorkerError::Database(format!("Parse error: {}", e)))?;
+
+            for row in rows {
                 existing.push(row.store_path_hash);
             }
         }
