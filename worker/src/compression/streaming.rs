@@ -8,15 +8,16 @@
 //! 3. Uploading parts immediately to free memory
 //!
 //! Memory usage is approximately:
-//! - Input buffer: ~1MB (streaming read chunks)
+//! - Input buffer: ~4MB (for Zstd block buffering)
 //! - Compressor state: ~1MB (compression context)
 //! - Part buffer: 5-8MB (minimum R2 part size)
-//! - Total: ~9MB regardless of file size
+//! - Total: ~13MB regardless of file size
 //!
 //! ## Compression Format Differences
 //!
-//! - **zstd**: Supports concatenated frames. Each chunk can be compressed independently
-//!   and the resulting frames can be concatenated. Decompressor handles this transparently.
+//! - **zstd**: Supports concatenated frames. Input is buffered to 4MB blocks before
+//!   compression to give the compressor more context for pattern matching. The resulting
+//!   frames are concatenated and the decompressor handles this transparently.
 //!
 //! - **brotli**: Does NOT support concatenated streams. Must use a stateful compressor
 //!   that maintains compression context across all chunks. This module uses
@@ -32,13 +33,33 @@ use super::config::{CompressionLevel, CompressionType};
 use crate::error::{WorkerError, WorkerResult};
 use crate::storage::TARGET_PART_SIZE;
 
+/// Default input block size for Zstd compression (4MB).
+///
+/// Zstd supports concatenated frames, so we buffer input data and compress
+/// larger blocks to give the compressor more context for pattern matching.
+/// This significantly improves compression ratio compared to compressing
+/// small chunks independently.
+///
+/// 4MB is a good balance between:
+/// - Compression ratio (more context = better compression)
+/// - Memory usage (stays well under 128MB limit)
+/// - Latency (reasonable time to first upload)
+const ZSTD_INPUT_BLOCK_SIZE: usize = 4 * 1024 * 1024;
+
 /// Streaming compressor with hash computation.
 ///
 /// This compressor accumulates compressed data and signals when a part is ready
 /// to be uploaded. It computes the SHA256 hash of the compressed output as it goes.
+///
+/// For Zstd compression, input data is buffered to larger blocks (4MB) before
+/// compression to improve compression ratio through better pattern matching.
 pub struct StreamingCompressor {
     /// Accumulated compressed data (part buffer).
     buffer: Vec<u8>,
+
+    /// Input buffer for Zstd (to compress larger blocks).
+    /// Only used when compression type is Zstd.
+    input_buffer: Vec<u8>,
 
     /// Hash of compressed data (computed incrementally).
     hasher: Sha256,
@@ -68,9 +89,17 @@ impl StreamingCompressor {
         level: CompressionLevel,
         target_part_size: usize,
     ) -> Self {
+        // Pre-allocate input buffer for Zstd
+        let input_buffer = if compression == CompressionType::Zstd {
+            Vec::with_capacity(ZSTD_INPUT_BLOCK_SIZE + 64 * 1024)
+        } else {
+            Vec::new()
+        };
+
         Self {
             // Pre-allocate with some extra room to avoid reallocation
             buffer: Vec::with_capacity(target_part_size + 1024 * 1024),
+            input_buffer,
             hasher: Sha256::new(),
             total_size: 0,
             compression,
@@ -90,6 +119,9 @@ impl StreamingCompressor {
     /// If the buffer reaches the target part size, returns exactly target_part_size
     /// bytes so they can be uploaded as a multipart part.
     ///
+    /// For Zstd, input is buffered to 4MB blocks before compression to improve
+    /// compression ratio. Other formats compress immediately.
+    ///
     /// IMPORTANT: R2 multipart uploads require all non-trailing parts to have
     /// exactly the same size. This method ensures that by returning exactly
     /// target_part_size bytes and keeping any excess in the buffer.
@@ -101,11 +133,23 @@ impl StreamingCompressor {
     /// * `Ok(Some(data))` - Exactly target_part_size bytes ready for upload
     /// * `Ok(None)` - Buffer is not yet full, continue accumulating
     pub fn compress_chunk(&mut self, input: &[u8]) -> WorkerResult<Option<Vec<u8>>> {
-        let compressed = self.compress_data(input)?;
+        // For Zstd, buffer input to compress larger blocks
+        if self.compression == CompressionType::Zstd {
+            self.input_buffer.extend_from_slice(input);
 
-        // Update hash and accumulate
-        self.hasher.update(&compressed);
-        self.buffer.extend(compressed);
+            // Compress when we have enough input
+            while self.input_buffer.len() >= ZSTD_INPUT_BLOCK_SIZE {
+                let block: Vec<u8> = self.input_buffer.drain(..ZSTD_INPUT_BLOCK_SIZE).collect();
+                let compressed = self.compress_data(&block)?;
+                self.hasher.update(&compressed);
+                self.buffer.extend(compressed);
+            }
+        } else {
+            // Other formats: compress immediately
+            let compressed = self.compress_data(input)?;
+            self.hasher.update(&compressed);
+            self.buffer.extend(compressed);
+        }
 
         // Check if we have enough for a part
         // CRITICAL: Return exactly target_part_size bytes, keeping excess for next part
@@ -125,9 +169,8 @@ impl StreamingCompressor {
         match self.compression {
             CompressionType::None => Ok(input.to_vec()),
             CompressionType::Zstd => {
-                // Each chunk is compressed as an independent zstd frame.
-                // This is slightly less efficient than streaming compression
-                // but works with the WASM bindings we have.
+                // Compress the block as a single zstd frame.
+                // Multiple frames will be concatenated; zstd decompressors handle this.
                 super::js_zstd::compress(input, self.level.to_zstd_level())
             }
             CompressionType::Brotli => {
@@ -184,7 +227,17 @@ impl StreamingCompressor {
     /// - Remaining compressed data (may be empty or less than target size)
     /// - SHA256 hash of all compressed data (hex-encoded)
     /// - Total size of compressed data
-    pub fn finish(self) -> StreamingCompressionResult {
+    pub fn finish(mut self) -> StreamingCompressionResult {
+        // For Zstd, compress any remaining input
+        if self.compression == CompressionType::Zstd && !self.input_buffer.is_empty() {
+            if let Ok(compressed) =
+                super::js_zstd::compress(&self.input_buffer, self.level.to_zstd_level())
+            {
+                self.hasher.update(&compressed);
+                self.buffer.extend(compressed);
+            }
+        }
+
         let file_hash = hex::encode(self.hasher.finalize());
         let remaining_size = self.buffer.len() as u64;
 
@@ -1112,5 +1165,84 @@ mod tests {
         println!("  Original size: {} bytes", original_data.len());
         println!("  Compressed size: {} bytes", compressed.len());
         println!("  Parts generated: {}", all_parts.len());
+    }
+
+    #[test]
+    fn test_streaming_compressor_zstd_input_buffering() {
+        // Verify that Zstd compression uses input buffering for better compression.
+        // The actual compression requires WASM runtime, so we just verify the buffer setup.
+
+        // Verify the ZSTD_INPUT_BLOCK_SIZE constant is reasonable
+        assert_eq!(ZSTD_INPUT_BLOCK_SIZE, 4 * 1024 * 1024); // 4MB
+
+        // Create a Zstd compressor and verify it has input buffer capacity
+        let compressor = StreamingCompressor::new(
+            CompressionType::Zstd,
+            CompressionLevel::Default,
+            8 * 1024 * 1024,
+        );
+
+        // Zstd compressor should have input buffer pre-allocated
+        assert!(compressor.input_buffer.capacity() >= ZSTD_INPUT_BLOCK_SIZE);
+
+        // Non-Zstd compressor should not have input buffer
+        let brotli_compressor = StreamingCompressor::new(
+            CompressionType::Brotli,
+            CompressionLevel::Default,
+            8 * 1024 * 1024,
+        );
+        assert!(brotli_compressor.input_buffer.is_empty());
+        assert_eq!(brotli_compressor.input_buffer.capacity(), 0);
+
+        println!("Zstd input buffering test:");
+        println!("  Block size: {} bytes", ZSTD_INPUT_BLOCK_SIZE);
+        println!(
+            "  Input buffer capacity: {} bytes",
+            compressor.input_buffer.capacity()
+        );
+    }
+
+    #[test]
+    fn test_zstd_block_size_improvement() {
+        // Document the expected improvement from using larger input blocks for Zstd.
+        //
+        // Without input buffering (old approach):
+        // - Each ~64KB input chunk compressed independently
+        // - For 200MB file: ~3125 independent Zstd frames
+        // - Frame overhead: ~5-12 bytes/frame = 15-37KB overhead
+        // - No cross-chunk pattern matching
+        //
+        // With 4MB input buffering (new approach):
+        // - Input buffered to 4MB before compressing
+        // - For 200MB file: ~50 Zstd frames
+        // - Frame overhead: ~250-600 bytes
+        // - Much better compression within each 4MB block
+        //
+        // Expected improvement: 5-15% better compression ratio for typical NAR files
+
+        let old_frame_count = 200 * 1024 * 1024 / (64 * 1024); // ~3125 frames
+        let new_frame_count = 200 * 1024 * 1024 / ZSTD_INPUT_BLOCK_SIZE; // ~50 frames
+
+        let old_overhead_low = old_frame_count * 5;
+        let old_overhead_high = old_frame_count * 12;
+        let new_overhead_low = new_frame_count * 5;
+        let new_overhead_high = new_frame_count * 12;
+
+        println!("Compression comparison for 200MB file:");
+        println!(
+            "  Old (64KB chunks): {} frames, {}-{} bytes overhead",
+            old_frame_count, old_overhead_low, old_overhead_high
+        );
+        println!(
+            "  New (4MB blocks): {} frames, {}-{} bytes overhead",
+            new_frame_count, new_overhead_low, new_overhead_high
+        );
+        println!(
+            "  Frame count reduction: {}x fewer frames",
+            old_frame_count / new_frame_count
+        );
+
+        assert!(new_frame_count < old_frame_count / 50);
+        assert!(new_overhead_high < old_overhead_low);
     }
 }

@@ -1,5 +1,11 @@
-{ pkgs, lib, config, flake, attic, ... }:
-let
+{
+  pkgs,
+  lib,
+  config,
+  flake,
+  attic,
+  ...
+}: let
   inherit (lib) types;
 
   serverConfigFile = config.nodes.server.services.atticd.configFile;
@@ -45,7 +51,7 @@ let
       server = {
         services.postgresql = {
           enable = true;
-          ensureDatabases = [ "attic" ];
+          ensureDatabases = ["attic"];
           ensureUsers = [
             {
               name = "atticd";
@@ -105,7 +111,7 @@ let
           };
         };
 
-        networking.firewall.allowedTCPPorts = [ 9000 ];
+        networking.firewall.allowedTCPPorts = [9000];
 
         services.atticd.settings = {
           storage = {
@@ -140,7 +146,7 @@ let
 in {
   options = {
     database = lib.mkOption {
-      type = types.enum [ "sqlite" "postgres" ];
+      type = types.enum ["sqlite" "postgres"];
       default = "sqlite";
     };
     storage = lib.mkOption {
@@ -171,7 +177,7 @@ in {
           settings = {
             listen = "[::]:8080";
 
-            jwt = { };
+            jwt = {};
 
             chunking = {
               nar-size-threshold = 1;
@@ -182,13 +188,13 @@ in {
           };
         };
 
-        environment.systemPackages = [ pkgs.openssl pkgs.attic-server ];
+        environment.systemPackages = [pkgs.openssl pkgs.attic-server];
 
-        networking.firewall.allowedTCPPorts = [ 8080 ];
+        networking.firewall.allowedTCPPorts = [8080];
       };
 
       client = {
-        environment.systemPackages = [ pkgs.attic ];
+        environment.systemPackages = [pkgs.attic];
       };
     };
 
@@ -269,10 +275,10 @@ in {
           client.fail(f"curl -sL --fail-with-body http://server:8080/test/{test_file_hash}.narinfo")
 
       ${lib.optionalString (config.storage == "local") ''
-      with subtest("Check that all chunks are actually deleted after GC"):
-          files = server.succeed("find /var/lib/atticd/storage -type f ! -name 'VERSION'")
-          print(f"Remaining files: {files}")
-          assert files.strip() == "", "Some files remain after GC: " + files
+        with subtest("Check that all chunks are actually deleted after GC"):
+            files = server.succeed("find /var/lib/atticd/storage -type f ! -name 'VERSION'")
+            print(f"Remaining files: {files}")
+            assert files.strip() == "", "Some files remain after GC: " + files
       ''}
 
       with subtest("Check that we can include the upload info in the payload"):
@@ -287,6 +293,61 @@ in {
           client.succeed("attic cache destroy --no-confirm test")
           client.fail("attic cache info test")
           client.fail("curl -sL --fail-with-body http://server:8080/test/nix-cache-info")
+
+      with subtest("Check that make-token works with --secret-base64"):
+          # Generate a random HS256 secret (32 bytes, base64 encoded)
+          hs256_secret = server.succeed("openssl rand -base64 32").strip()
+
+          # Create a token using --secret-base64 (no config file needed for signing)
+          token_with_secret = server.succeed(f"atticd-atticadm make-token --secret-base64 '{hs256_secret}' --sub 'direct-secret-test' --validity '1 hour' --pull '*' </dev/null").strip()
+
+          # The token should be a valid JWT (has 3 parts separated by dots)
+          parts = token_with_secret.split(".")
+          assert len(parts) == 3, f"Expected JWT with 3 parts, got {len(parts)}"
+
+          # Note: This token won't work with the server since it uses RS256,
+          # but we've verified the --secret-base64 flag works for token generation
+
+      with subtest("Check that we can push and pull a larger derivation"):
+          # Create a new cache for this test
+          client.succeed("attic cache create test-large")
+
+          # Create a derivation that produces ~1MB of output
+          # This tests the upload path for moderately sized files
+          client.succeed("""
+          cat > large-test.nix << 'EOF'
+          derivation {
+            name = "large-test";
+            builder = "/bin/sh";
+            args = [ "-c" "dd if=/dev/zero of=$out bs=1024 count=1024" ];
+            system = builtins.currentSystem;
+            preferLocalBuild = true;
+            allowSubstitutes = false;
+          }
+          EOF
+          """)
+          large_file = client.succeed("nix-build --no-out-link large-test.nix").strip()
+          large_file_hash = large_file.removeprefix("/nix/store/")[:32]
+
+          # Push and verify
+          client.succeed(f"attic push test-large {large_file}")
+          client.succeed("attic cache configure test-large --public")
+
+          # Verify narinfo exists
+          client.succeed(f"curl -sL --fail-with-body http://server:8080/test-large/{large_file_hash}.narinfo")
+
+          # Delete local and pull back
+          client.succeed(f"nix-store --delete {large_file}")
+          client.fail(f"ls {large_file}")
+          client.succeed("attic use root:test-large")
+          client.succeed(f"nix-store -r {large_file}")
+
+          # Verify file size is correct (~1MB)
+          size = int(client.succeed(f"stat -c %s {large_file}").strip())
+          assert size >= 1024 * 1024, f"Expected file >= 1MB, got {size} bytes"
+
+          # Cleanup
+          client.succeed("attic cache destroy --no-confirm test-large")
 
       ${databaseModules.${config.database}.testScriptPost or ""}
       ${storageModules.${config.storage}.testScriptPost or ""}

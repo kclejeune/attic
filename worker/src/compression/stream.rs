@@ -124,3 +124,155 @@ pub fn compress_buffer(
         compression: actual_compression,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compression::CompressionLevel;
+
+    #[test]
+    fn test_compress_buffer_none() {
+        let input = b"Hello, World!";
+        let config = CompressionConfig {
+            r#type: CompressionType::None,
+            level: CompressionLevel::Default,
+        };
+
+        let result = compress_buffer(input, &config).unwrap();
+
+        // No compression means data unchanged
+        assert_eq!(result.data, input);
+        assert_eq!(result.compression, CompressionType::None);
+        assert_eq!(result.nar_size, input.len() as u64);
+        assert_eq!(result.file_size, input.len() as u64);
+
+        // Hashes should be the same since data is unchanged
+        assert_eq!(result.nar_hash, result.file_hash);
+
+        // Verify hash is correct
+        assert_eq!(
+            result.nar_hash,
+            "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"
+        );
+    }
+
+    #[test]
+    fn test_compress_buffer_brotli() {
+        // Use highly compressible data
+        let input = vec![0x42u8; 1000];
+        let config = CompressionConfig {
+            r#type: CompressionType::Brotli,
+            level: CompressionLevel::Default,
+        };
+
+        let result = compress_buffer(&input, &config).unwrap();
+
+        // Should compress well
+        assert!(result.file_size < result.nar_size);
+        assert_eq!(result.compression, CompressionType::Brotli);
+        assert_eq!(result.nar_size, 1000);
+
+        // Verify decompression works
+        let mut decompressed = Vec::new();
+        brotli::BrotliDecompress(&mut std::io::Cursor::new(&result.data), &mut decompressed)
+            .expect("Brotli decompression should succeed");
+        assert_eq!(decompressed, input);
+    }
+
+    #[test]
+    fn test_compress_buffer_gzip() {
+        let input = vec![0x42u8; 1000];
+        let config = CompressionConfig {
+            r#type: CompressionType::Gzip,
+            level: CompressionLevel::Default,
+        };
+
+        let result = compress_buffer(&input, &config).unwrap();
+
+        // Should compress well
+        assert!(result.file_size < result.nar_size);
+        assert_eq!(result.compression, CompressionType::Gzip);
+
+        // Verify decompression works
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+
+        let mut decompressed = Vec::new();
+        let mut decoder = GzDecoder::new(&result.data[..]);
+        decoder
+            .read_to_end(&mut decompressed)
+            .expect("Gzip decompression should succeed");
+        assert_eq!(decompressed, input);
+    }
+
+    #[test]
+    fn test_compress_buffer_xz() {
+        let input = vec![0x42u8; 1000];
+        let config = CompressionConfig {
+            r#type: CompressionType::Xz,
+            level: CompressionLevel::Default,
+        };
+
+        let result = compress_buffer(&input, &config).unwrap();
+
+        // Should compress well
+        assert!(result.file_size < result.nar_size);
+        assert_eq!(result.compression, CompressionType::Xz);
+
+        // Verify decompression works
+        use lzma_rust2::XzReader;
+        use std::io::Read;
+
+        let mut decompressed = Vec::new();
+        let mut decoder = XzReader::new(&result.data[..], false);
+        decoder
+            .read_to_end(&mut decompressed)
+            .expect("XZ decompression should succeed");
+        assert_eq!(decompressed, input);
+    }
+
+    #[test]
+    fn test_compress_buffer_bzip2_fallback() {
+        // Bzip2 is not supported, should fall back to no compression
+        let input = b"test data";
+        let config = CompressionConfig {
+            r#type: CompressionType::Bzip2,
+            level: CompressionLevel::Default,
+        };
+
+        let result = compress_buffer(input, &config).unwrap();
+
+        // Should fall back to no compression
+        assert_eq!(result.data, input);
+        assert_eq!(result.compression, CompressionType::None);
+    }
+
+    #[test]
+    fn test_compress_buffer_hash_correctness() {
+        let input = b"test data for hashing";
+        let config = CompressionConfig {
+            r#type: CompressionType::Brotli,
+            level: CompressionLevel::Default,
+        };
+
+        let result = compress_buffer(input, &config).unwrap();
+
+        // NAR hash should be hash of original data
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(input);
+        let expected_nar_hash = hex::encode(hasher.finalize());
+        assert_eq!(result.nar_hash, expected_nar_hash);
+
+        // File hash should be hash of compressed data
+        let mut hasher = Sha256::new();
+        hasher.update(&result.data);
+        let expected_file_hash = hex::encode(hasher.finalize());
+        assert_eq!(result.file_hash, expected_file_hash);
+
+        // Hashes should be different (data was compressed)
+        assert_ne!(result.nar_hash, result.file_hash);
+    }
+
+    // Note: Zstd tests require the WASM runtime and are tested via integration tests
+}

@@ -11,7 +11,7 @@
 //!
 //! ## Streaming Compression (`StreamingCompressor`)
 //! Used for large files (>15MB). Compresses in chunks, uploads via R2 multipart.
-//! Memory stays under ~9MB regardless of file size.
+//! Memory stays under ~13MB regardless of file size (includes 4MB input buffer for Zstd).
 
 mod config;
 pub mod js_zstd;

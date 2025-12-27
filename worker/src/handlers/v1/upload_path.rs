@@ -600,8 +600,9 @@ async fn handle_streaming_compressed_upload(
             }
         }
         CompressionType::Zstd | CompressionType::None | CompressionType::Bzip2 => {
-            // Zstd/None/Bzip2: Use streaming compressor (zstd supports concatenated frames)
-            // Bzip2 falls back to no compression in the worker
+            // Zstd/None/Bzip2: Use streaming compressor
+            // - Zstd: Buffers input to 4MB blocks for better compression ratio
+            // - None/Bzip2: Pass through (Bzip2 falls back to no compression in worker)
             let mut compressor = StreamingCompressor::with_defaults(
                 compression_config.r#type,
                 CompressionLevel::Default,
