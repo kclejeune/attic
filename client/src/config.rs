@@ -3,8 +3,8 @@
 //! Configuration files are stored under `$XDG_CONFIG_HOME/attic/config.toml`.
 //! We automatically write modified configurations back for a good end-user
 //! experience (e.g., `attic login`).
-
 use std::collections::HashMap;
+use std::env;
 use std::fs::{self, OpenOptions, Permissions, read_to_string};
 use std::io::Write;
 use std::ops::{Deref, DerefMut};
@@ -25,6 +25,8 @@ const XDG_PREFIX: &str = "attic";
 /// The permission the configuration file should have.
 const FILE_MODE: u32 = 0o600;
 
+/// Environment variable for authentication token.
+const ENV_ATTIC_AUTH_TOKEN: &str = "ATTIC_AUTH_TOKEN";
 /// Configuration loader.
 #[derive(Debug)]
 pub struct Config {
@@ -57,7 +59,20 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
+    /// Returns the authentication token for this server.
+    ///
+    /// The token is resolved in the following order:
+    /// 1. `ATTIC_AUTH_TOKEN` environment variable (if set)
+    /// 2. Token from the configuration file (raw or from token-file)
     pub fn token(&self) -> Result<Option<String>> {
+        // Check environment variable first
+        if let Ok(token) = env::var(ENV_ATTIC_AUTH_TOKEN) {
+            if !token.is_empty() {
+                return Ok(Some(token));
+            }
+        }
+
+        // Fall back to config file token
         self.token.as_ref().map(|token| token.get()).transpose()
     }
 }
