@@ -163,6 +163,10 @@ pub fn compute_fingerprint(
 ///
 /// Input: "sha256:64hexchars" or "sha256:52base32chars"
 /// Output: "sha256:52base32chars"
+///
+/// If the hash is already in base32 format (52 chars), it is returned as-is.
+/// If the hash is in hex format (64 chars), it is converted to base32.
+/// If conversion fails, the original hash is returned unchanged.
 pub fn convert_hash_to_base32(hash: &str) -> String {
     // Parse the hash type and value
     let (hash_type, hash_value) = match hash.split_once(':') {
@@ -172,52 +176,24 @@ pub fn convert_hash_to_base32(hash: &str) -> String {
 
     // SHA256 hex is 64 chars, base32 is 52 chars
     if hash_value.len() == 64 {
-        // This is hex, convert to base32
-        match hex::decode(hash_value) {
-            Ok(bytes) => {
-                let base32 = nix_base32::to_nix_base32(&bytes);
-                format!("{}:{}", hash_type, base32)
-            }
-            Err(_) => hash.to_string(), // Invalid hex, return as-is
-        }
-    } else {
-        // Already base32 or some other format
-        hash.to_string()
-    }
-}
-
-/// Converts a hash from base32 format to hex format if needed.
-///
-/// Input: "sha256:52base32chars" or "sha256:64hexchars" or just the hash part
-/// Output: "sha256:64hexchars"
-pub fn convert_hash_to_hex(hash: &str) -> String {
-    // Handle case where hash might not have prefix
-    let (hash_type, hash_value) = match hash.split_once(':') {
-        Some((t, v)) => (t, v),
-        None => {
-            // No prefix, try to determine format and add sha256 prefix
-            if hash.len() == 52 {
-                // Likely base32
-                match nix_base32::from_nix_base32(hash) {
-                    Some(bytes) => return format!("sha256:{}", hex::encode(bytes)),
-                    None => return format!("sha256:{}", hash),
+        // This looks like hex, try to convert to base32
+        // First verify it's valid hex
+        if hash_value.chars().all(|c| c.is_ascii_hexdigit()) {
+            match hex::decode(hash_value) {
+                Ok(bytes) if bytes.len() == 32 => {
+                    let base32 = nix_base32::to_nix_base32(&bytes);
+                    format!("{}:{}", hash_type, base32)
                 }
-            } else {
-                // Assume hex or return as-is
-                return format!("sha256:{}", hash);
+                _ => hash.to_string(), // Invalid hex or wrong length, return as-is
             }
+        } else {
+            hash.to_string() // Not valid hex, return as-is
         }
-    };
-
-    // SHA256 base32 is 52 chars, hex is 64 chars
-    if hash_value.len() == 52 {
-        // This is base32, convert to hex
-        match nix_base32::from_nix_base32(hash_value) {
-            Some(bytes) => format!("{}:{}", hash_type, hex::encode(bytes)),
-            None => hash.to_string(), // Invalid base32, return as-is
-        }
+    } else if hash_value.len() == 52 {
+        // Already base32 format, return as-is
+        hash.to_string()
     } else {
-        // Already hex or some other format
+        // Unknown format, return as-is
         hash.to_string()
     }
 }
