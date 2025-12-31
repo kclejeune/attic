@@ -368,9 +368,15 @@ impl PartCollector {
         std::mem::take(&mut self.ready_parts)
     }
 
-    /// Get remaining buffer contents.
-    fn take_remaining(self) -> Vec<u8> {
-        self.buffer
+    /// Get all remaining data (any ready parts plus buffer).
+    fn take_all_remaining(mut self) -> Vec<u8> {
+        // Combine any ready parts with the remaining buffer
+        let mut result = Vec::new();
+        for part in self.ready_parts.drain(..) {
+            result.extend(part);
+        }
+        result.extend(self.buffer);
+        result
     }
 }
 
@@ -440,11 +446,11 @@ impl StatefulBrotliCompressor {
 
     /// Finish compression and return remaining data plus hash.
     pub fn finish(self) -> WorkerResult<StatefulBrotliResult> {
-        // Finish the compressor to flush all remaining data
-        // into_inner() returns the inner writer directly (not a Result)
+        // into_inner() triggers BROTLI_OPERATION_FINISH which flushes all remaining data
         let collector = self.compressor.into_inner();
 
-        let remaining_data = collector.take_remaining();
+        // Get all remaining data (including any parts created during finish)
+        let remaining_data = collector.take_all_remaining();
 
         // Update hash with remaining data
         let mut hasher = self.hasher;
@@ -542,7 +548,7 @@ impl StatefulGzipCompressor {
             .finish()
             .map_err(|e| WorkerError::Compression(format!("Gzip finish failed: {:?}", e)))?;
 
-        let remaining_data = collector.take_remaining();
+        let remaining_data = collector.take_all_remaining();
 
         // Update hash with remaining data
         let mut hasher = self.hasher;
@@ -642,7 +648,7 @@ impl StatefulXzCompressor {
             .finish()
             .map_err(|e| WorkerError::Compression(format!("XZ finish failed: {:?}", e)))?;
 
-        let remaining_data = collector.take_remaining();
+        let remaining_data = collector.take_all_remaining();
 
         // Update hash with remaining data
         let mut hasher = self.hasher;
