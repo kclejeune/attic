@@ -2,7 +2,9 @@
 
 use worker::*;
 
-use crate::crypto::{compute_fingerprint, sign_message};
+use crate::crypto::{
+    compute_fingerprint, convert_hash_to_base32, convert_hash_to_hex, sign_message,
+};
 use crate::error::WorkerError;
 use crate::state::WorkerState;
 
@@ -189,13 +191,17 @@ pub async fn get_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Err(e) => return Ok(e.to_response()),
     };
 
-    // Find the NAR - try with sha256: prefix since that's how it's stored
-    let nar_hash_with_prefix = format!("sha256:{}", nar_hash_raw);
-    let nar = match state.database.find_nar_by_hash(&nar_hash_with_prefix).await {
+    // Find the NAR - convert hash to hex format (how it's stored in DB)
+    // The URL may contain base32 hash, so we need to convert it
+    let nar_hash_hex = convert_hash_to_hex(&format!("sha256:{}", nar_hash_raw));
+    let nar = match state.database.find_nar_by_hash(&nar_hash_hex).await {
         Ok(Some(n)) => n,
         Ok(None) => {
-            // Try without prefix as fallback
-            match state.database.find_nar_by_hash(nar_hash_raw).await {
+            // Try with just the raw hash as fallback (in case DB stores without prefix)
+            let raw_hex = nar_hash_hex
+                .strip_prefix("sha256:")
+                .unwrap_or(&nar_hash_hex);
+            match state.database.find_nar_by_hash(raw_hex).await {
                 Ok(Some(n)) => n,
                 Ok(None) => return Response::error("Not found", 404),
                 Err(e) => return Ok(e.to_response()),
@@ -259,13 +265,16 @@ pub async fn head_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> 
         Err(e) => return Ok(e.to_response()),
     };
 
-    // Find the NAR
-    let nar_hash_with_prefix = format!("sha256:{}", nar_hash_raw);
-    let nar = match state.database.find_nar_by_hash(&nar_hash_with_prefix).await {
+    // Find the NAR - convert hash to hex format (how it's stored in DB)
+    let nar_hash_hex = convert_hash_to_hex(&format!("sha256:{}", nar_hash_raw));
+    let nar = match state.database.find_nar_by_hash(&nar_hash_hex).await {
         Ok(Some(n)) => n,
         Ok(None) => {
-            // Try without prefix as fallback
-            match state.database.find_nar_by_hash(nar_hash_raw).await {
+            // Try with just the raw hash as fallback
+            let raw_hex = nar_hash_hex
+                .strip_prefix("sha256:")
+                .unwrap_or(&nar_hash_hex);
+            match state.database.find_nar_by_hash(raw_hex).await {
                 Ok(Some(n)) => n,
                 Ok(None) => return Response::error("Not found", 404),
                 Err(e) => return Ok(e.to_response()),
@@ -313,11 +322,16 @@ fn build_narinfo(
         .map_err(|e| worker::Error::RustError(e.to_string()))?;
 
     // URL for the NAR file (with compression extension)
-    // Strip sha256: prefix if present for clean URL
-    let hash_for_url = nar
-        .nar_hash
+    // Convert hash to base32 for URL (Nix standard format)
+    let nar_hash_for_url = if nar.nar_hash.contains(':') {
+        nar.nar_hash.clone()
+    } else {
+        format!("sha256:{}", nar.nar_hash)
+    };
+    let nar_hash_base32_for_url = convert_hash_to_base32(&nar_hash_for_url);
+    let hash_for_url = nar_hash_base32_for_url
         .strip_prefix("sha256:")
-        .unwrap_or(&nar.nar_hash);
+        .unwrap_or(&nar_hash_base32_for_url);
     let extension = match nar.compression.as_str() {
         "zstd" => ".zst",
         "brotli" | "br" => ".br",
@@ -335,7 +349,14 @@ fn build_narinfo(
     // FileHash and FileSize (compressed file stats)
     if let Some(chunk) = chunk {
         if let Some(ref file_hash) = chunk.file_hash {
-            writeln!(narinfo, "FileHash: sha256:{}", file_hash)
+            // Convert hex hash to base32 format for Nix compatibility
+            let file_hash_typed = if file_hash.contains(':') {
+                file_hash.clone()
+            } else {
+                format!("sha256:{}", file_hash)
+            };
+            let file_hash_base32 = convert_hash_to_base32(&file_hash_typed);
+            writeln!(narinfo, "FileHash: {}", file_hash_base32)
                 .map_err(|e| worker::Error::RustError(e.to_string()))?;
         }
         if let Some(file_size) = chunk.file_size {
@@ -345,12 +366,14 @@ fn build_narinfo(
     }
 
     // NAR hash and size (uncompressed)
-    // Strip prefix if already present (client may send "sha256:..." or just hash)
-    let nar_hash = nar
-        .nar_hash
-        .strip_prefix("sha256:")
-        .unwrap_or(&nar.nar_hash);
-    writeln!(narinfo, "NarHash: sha256:{}", nar_hash)
+    // Convert to base32 format for Nix compatibility
+    let nar_hash_typed = if nar.nar_hash.contains(':') {
+        nar.nar_hash.clone()
+    } else {
+        format!("sha256:{}", nar.nar_hash)
+    };
+    let nar_hash_base32 = convert_hash_to_base32(&nar_hash_typed);
+    writeln!(narinfo, "NarHash: {}", nar_hash_base32)
         .map_err(|e| worker::Error::RustError(e.to_string()))?;
     writeln!(narinfo, "NarSize: {}", nar.nar_size)
         .map_err(|e| worker::Error::RustError(e.to_string()))?;
