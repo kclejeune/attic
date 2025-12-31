@@ -686,11 +686,24 @@ async fn handle_streaming_compressed_upload(
         .to_response());
     }
 
-    // Upload remaining data as final part (can be < 5MB)
+    // Upload remaining data as final part(s)
+    // IMPORTANT: R2 multipart requires all non-trailing parts to be exactly the same size.
+    // The remaining_data from finish() could be larger than TARGET_PART_SIZE if the
+    // compressor flushed a lot during finalization. We must split it into proper chunks.
     if !remaining_data.is_empty() {
-        if let Err(e) = multipart.upload_part(remaining_data).await {
-            let _ = multipart.abort().await;
-            return Ok(e.to_response());
+        let target_size = crate::storage::TARGET_PART_SIZE;
+        let mut offset = 0;
+
+        while offset < remaining_data.len() {
+            let end = (offset + target_size).min(remaining_data.len());
+            let part_data = remaining_data[offset..end].to_vec();
+
+            if let Err(e) = multipart.upload_part(part_data).await {
+                let _ = multipart.abort().await;
+                return Ok(e.to_response());
+            }
+
+            offset = end;
         }
     }
 
