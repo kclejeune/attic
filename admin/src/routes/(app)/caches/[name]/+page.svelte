@@ -39,7 +39,7 @@
 				</span>
 			</div>
 		</div>
-		<Button variant="outline" disabled>Configure</Button>
+		<Button variant="outline" href="/caches/{c.name}/settings">Configure</Button>
 	</header>
 
 	<div class="mb-3 flex items-baseline justify-between">

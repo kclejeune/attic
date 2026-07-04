@@ -14,7 +14,7 @@
 				Each cache is an isolated view into the shared content-addressed store.
 			</p>
 		</div>
-		<Button disabled>
+		<Button href="/caches/new">
 			<Plus class="size-4" />
 			New cache
 		</Button>
