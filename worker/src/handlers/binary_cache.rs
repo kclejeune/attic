@@ -17,12 +17,20 @@ async fn authorize_pull(
     cache_name: &str,
     is_public: bool,
 ) -> WorkerResult<()> {
-    let req_state = RequestState::from_request(req, state).await?;
+    // A public cache is readable anonymously, so a malformed, expired, or
+    // revoked token must not break the pull — ignore it and fall back to public
+    // access. Private caches still reject an invalid token. (Push and config
+    // endpoints validate strictly elsewhere; this leniency is pull-only.)
+    let token = match RequestState::from_request(req, state).await {
+        Ok(req_state) => req_state.token,
+        Err(_) if is_public => None,
+        Err(e) => return Err(e),
+    };
 
     let cache_name_typed = attic::cache::CacheName::new(cache_name.to_string())
         .map_err(|e| WorkerError::BadRequest(format!("Invalid cache name: {}", e)))?;
 
-    let mut permission = match &req_state.token {
+    let mut permission = match &token {
         Some(token) => token.get_permission_for_cache(&cache_name_typed),
         None => attic_token::CachePermission::default(),
     };
