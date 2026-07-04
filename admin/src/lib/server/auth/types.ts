@@ -15,7 +15,8 @@ export interface Identity {
 
 /** The authenticated user attached to a request (`event.locals.user`). */
 export interface SessionUser {
-	id: number;
+	/** better-auth user id (text). */
+	id: string;
 	sub: string;
 	provider: AuthProvider;
 	email: string | null;

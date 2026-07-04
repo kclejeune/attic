@@ -20,6 +20,7 @@ declare global {
 			env: {
 				ATTIC_DB: D1Database;
 				ATTIC_API: Fetcher;
+				APP_URL?: string;
 				JWT_HS256_SECRET_BASE64?: string;
 				SESSION_SECRET?: string;
 				OIDC_ISSUER?: string;
