@@ -3,13 +3,23 @@
 	import { goto } from '$app/navigation';
 	import { toggleMode, mode } from 'mode-watcher';
 	import { authClient } from '$lib/auth-client';
-	import { LayoutDashboard, Boxes, KeyRound, Users, LogOut, Sun, Moon } from '@lucide/svelte';
+	import {
+		LayoutDashboard,
+		Boxes,
+		KeyRound,
+		Users,
+		ChartLine,
+		LogOut,
+		Sun,
+		Moon
+	} from '@lucide/svelte';
 
 	let { children, data } = $props();
 
 	const nav = [
 		{ href: '/', label: 'Overview', icon: LayoutDashboard },
 		{ href: '/caches', label: 'Caches', icon: Boxes },
+		{ href: '/monitoring', label: 'Monitoring', icon: ChartLine },
 		{ href: '/tokens', label: 'Tokens', icon: KeyRound },
 		{ href: '/users', label: 'Users', icon: Users }
 	];
