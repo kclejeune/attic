@@ -1,0 +1,44 @@
+{
+  "name": "attic-admin",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // SvelteKit build output (adapter-cloudflare). The adapter writes the worker
+  // entry and the static client assets; the Cloudflare Vite plugin wires these
+  // up, so `main`/`assets.directory` are managed by the build.
+  "observability": { "enabled": true },
+
+  // Shared D1 database with the attic API worker. The admin app owns the
+  // user/api_token/session/audit_log tables; the attic worker owns cache/nar/etc.
+  "d1_databases": [
+    {
+      "binding": "ATTIC_DB",
+      "database_name": "attic",
+      "database_id": "872ceec3-5438-4069-b3fa-69fbb66dd011"
+    }
+  ],
+
+  // Service binding to the attic API worker. Admin data operations that already
+  // have server-side logic (cache config, permissions) are proxied here
+  // server-to-server, so the browser never talks to the API directly.
+  "services": [
+    {
+      "binding": "ATTIC_API",
+      "service": "attic-worker"
+    }
+  ]
+
+  // Secrets (set via `wrangler secret put`):
+  // - JWT_HS256_SECRET_BASE64: same HMAC secret the attic worker validates with;
+  //   used here to mint short-lived attic JWTs for service-binding API calls.
+  // - OIDC_CLIENT_SECRET: confidential-client secret for the OIDC token exchange.
+  // - SESSION_SECRET: HMAC key for signing session cookies.
+  //
+  // Vars (set in [vars] or the dashboard):
+  // - OIDC_ISSUER: OIDC discovery issuer URL (e.g. https://auth.example.com).
+  // - OIDC_CLIENT_ID: OIDC client id.
+  // - OIDC_REDIRECT_URI: this app's callback URL.
+  // - CF_ACCESS_TEAM_DOMAIN: e.g. https://kclejeune.cloudflareaccess.com (enables
+  //   the Cloudflare Access auth path).
+  // - CF_ACCESS_AUD: the Access application AUD tag.
+}
