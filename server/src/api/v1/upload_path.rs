@@ -37,6 +37,7 @@ use attic::api::v1::upload_path::{
     UploadPathResultKind,
 };
 use attic::chunking::chunk_stream;
+use attic::compression::CompressionType;
 use attic::hash::Hash;
 use attic::io::{HashReader, read_chunk_async};
 use attic::util::Finally;
@@ -48,10 +49,6 @@ use crate::database::entity::chunkref::{self, Entity as ChunkRef};
 use crate::database::entity::nar::{self, Entity as Nar, NarState};
 use crate::database::entity::object::{self, Entity as Object, InsertExt};
 use crate::database::{AtticDatabase, ChunkGuard, NarGuard};
-
-
-};
-};
 
 /// Number of chunks to upload to the storage backend at once.
 ///

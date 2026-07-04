@@ -22,9 +22,6 @@ use crate::storage::{LocalStorageConfig, S3StorageConfig};
 
 use attic::compression::CompressionType;
 
-//! Server configuration.
-};
-
 /// Application prefix in XDG base directories.
 ///
 /// This will be concatenated into `$XDG_CONFIG_HOME/attic`.
