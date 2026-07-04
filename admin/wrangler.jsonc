@@ -17,7 +17,9 @@
   "routes": [{ "pattern": "app.cache.kclj.io", "custom_domain": true }],
 
   "vars": {
-    "APP_URL": "https://app.cache.kclj.io"
+    "APP_URL": "https://app.cache.kclj.io",
+    "CF_ACCESS_TEAM_DOMAIN": "https://kclejeune.cloudflareaccess.com",
+    "CF_ACCESS_AUD": "623b56c404ad5907aad2ee0e6255d7c88f6e9aecf64ee2aca77090153c115217"
   },
 
   // Shared D1 database with the attic API worker. The admin app owns the
