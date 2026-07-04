@@ -1,8 +1,23 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { ShieldCheck } from '@lucide/svelte';
+	import { invalidateAll } from '$app/navigation';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
+	import { ShieldCheck, MoreHorizontal } from '@lucide/svelte';
 
-	let { data, form } = $props();
+	let { data } = $props();
+	let error = $state('');
+
+	async function setRole(userId: string, role: 'admin' | 'member') {
+		error = '';
+		const body = new FormData();
+		body.set('userId', userId);
+		body.set('role', role);
+		const res = await fetch('?/setRole', { method: 'POST', body });
+		if (!res.ok) {
+			error = 'Failed to update role.';
+			return;
+		}
+		await invalidateAll();
+	}
 </script>
 
 <div class="mx-auto max-w-6xl px-8 py-8">
@@ -13,8 +28,8 @@
 		</p>
 	</header>
 
-	{#if form?.error}
-		<p class="mb-4 text-sm text-destructive">{form.error}</p>
+	{#if error}
+		<p class="mb-4 text-sm text-destructive">{error}</p>
 	{/if}
 
 	<div class="overflow-hidden rounded-lg border">
@@ -24,6 +39,7 @@
 					<th class="px-4 py-2.5 font-medium">User</th>
 					<th class="px-4 py-2.5 font-medium">Sign-in</th>
 					<th class="px-4 py-2.5 font-medium">Role</th>
+					<th class="w-12 px-4 py-2.5"></th>
 				</tr>
 			</thead>
 			<tbody class="divide-y">
@@ -35,25 +51,37 @@
 						</td>
 						<td class="px-4 py-3 text-muted-foreground">{u.provider}</td>
 						<td class="px-4 py-3">
-							<form method="POST" action="?/setRole" use:enhance class="flex items-center gap-2">
-								<input type="hidden" name="userId" value={u.id} />
-								{#if u.role === 'admin'}
-									<span
-										class="inline-flex items-center gap-1.5 text-sm font-medium text-primary"
-									>
-										<ShieldCheck class="size-3.5" /> Admin
-									</span>
-								{/if}
-								<select
-									name="role"
-									value={u.role}
-									onchange={(e) => e.currentTarget.form?.requestSubmit()}
-									class="h-8 rounded-md border border-input bg-transparent px-2 text-sm focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+							{#if u.role === 'admin'}
+								<span class="inline-flex items-center gap-1.5 font-medium text-primary">
+									<ShieldCheck class="size-3.5" /> Admin
+								</span>
+							{:else}
+								<span class="text-muted-foreground">Member</span>
+							{/if}
+						</td>
+						<td class="px-4 py-3 text-right">
+							<DropdownMenu.Root>
+								<DropdownMenu.Trigger
+									class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+									aria-label="Manage user"
 								>
-									<option value="member">member</option>
-									<option value="admin">admin</option>
-								</select>
-							</form>
+									<MoreHorizontal class="size-4" />
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Content align="end">
+									<DropdownMenu.Item
+										disabled={u.role === 'admin'}
+										onSelect={() => setRole(u.id, 'admin')}
+									>
+										Make admin
+									</DropdownMenu.Item>
+									<DropdownMenu.Item
+										disabled={u.role === 'member'}
+										onSelect={() => setRole(u.id, 'member')}
+									>
+										Make member
+									</DropdownMenu.Item>
+								</DropdownMenu.Content>
+							</DropdownMenu.Root>
 						</td>
 					</tr>
 				{/each}
