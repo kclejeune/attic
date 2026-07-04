@@ -96,7 +96,7 @@ pub async fn create_cache(mut req: Request, ctx: RouteContext<()>) -> Result<Res
         Err(e) => return Ok(e.to_response()),
     };
 
-    let req_state = match RequestState::from_request(&req, &state.jwt_config) {
+    let req_state = match RequestState::from_request(&req, &state).await {
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };
@@ -190,7 +190,7 @@ pub async fn configure_cache(mut req: Request, ctx: RouteContext<()>) -> Result<
         Err(e) => return Ok(e.to_response()),
     };
 
-    let req_state = match RequestState::from_request(&req, &state.jwt_config) {
+    let req_state = match RequestState::from_request(&req, &state).await {
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };
@@ -304,7 +304,7 @@ pub async fn destroy_cache(req: Request, ctx: RouteContext<()>) -> Result<Respon
         Err(e) => return Ok(e.to_response()),
     };
 
-    let req_state = match RequestState::from_request(&req, &state.jwt_config) {
+    let req_state = match RequestState::from_request(&req, &state).await {
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };

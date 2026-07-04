@@ -261,4 +261,12 @@ impl Database {
             Database::Turso(backend) => backend.list_stale_pending_uploads(before).await,
         }
     }
+
+    /// Whether an admin-issued token (by `jti`) has been revoked.
+    pub async fn is_token_revoked(&self, jti: &str) -> WorkerResult<bool> {
+        match self {
+            Database::D1(backend) => backend.is_token_revoked(jti).await,
+            Database::Turso(backend) => backend.is_token_revoked(jti).await,
+        }
+    }
 }

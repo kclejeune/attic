@@ -644,6 +644,23 @@ impl TursoBackend {
         Ok(())
     }
 
+    /// Whether an admin-issued token (by `jti`) has been revoked.
+    pub async fn is_token_revoked(&self, jti: &str) -> WorkerResult<bool> {
+        let result = self
+            .execute(
+                "SELECT revoked_at FROM api_token WHERE id = ?",
+                vec![serde_json::Value::String(jti.to_string())],
+            )
+            .await?;
+
+        if let Some(rows) = result.rows {
+            if let Some(row) = rows.into_iter().next() {
+                return Ok(row.first().map(|v| !v.is_null()).unwrap_or(false));
+            }
+        }
+        Ok(false)
+    }
+
     /// List pending uploads created before the given RFC3339 timestamp (for GC).
     pub async fn list_stale_pending_uploads(
         &self,

@@ -343,6 +343,14 @@ impl Token {
         self.0.subject.as_deref()
     }
 
+    /// Returns the JWT ID (`jti`) claim, if present.
+    ///
+    /// Admin-issued tokens carry a `jti` so they can be revoked; bootstrap
+    /// tokens minted without one are not individually revocable.
+    pub fn jwt_id(&self) -> Option<&str> {
+        self.0.jwt_id.as_deref()
+    }
+
     /// Returns the claims as a serializable value.
     pub fn opaque_claims(&self) -> &impl Serialize {
         &self.0

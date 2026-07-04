@@ -110,9 +110,27 @@ pub struct RequestState {
 
 impl RequestState {
     /// Extract request state from a Worker request.
-    pub fn from_request(req: &Request, jwt_config: &JwtConfig) -> WorkerResult<Self> {
-        // Extract and validate token
-        let token = extract_token(req, jwt_config)?;
+    ///
+    /// Validates the bearer token's signature and, for admin-issued tokens
+    /// (those carrying a `jti`), rejects the request if that token has been
+    /// revoked. A revocation-check failure fails open (allows) so a database
+    /// hiccup does not take down pulls.
+    pub async fn from_request(req: &Request, state: &WorkerState) -> WorkerResult<Self> {
+        let token = extract_token(req, &state.jwt_config)?;
+
+        if let Some(ref t) = token {
+            if let Some(jti) = t.jwt_id() {
+                match state.database.is_token_revoked(jti).await {
+                    Ok(true) => {
+                        return Err(WorkerError::Authentication(
+                            "Token has been revoked".to_string(),
+                        ))
+                    }
+                    Ok(false) => {}
+                    Err(e) => console_log!("revocation check failed for jti {}: {}", jti, e),
+                }
+            }
+        }
 
         Ok(Self { token })
     }

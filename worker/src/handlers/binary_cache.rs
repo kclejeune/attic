@@ -11,13 +11,13 @@ use crate::state::{RequestState, WorkerState};
 /// Mirrors the native server: an anonymous request starts with no permissions,
 /// public caches implicitly grant pull, and any bearer token contributes its
 /// granted permissions for the named cache.
-fn authorize_pull(
+async fn authorize_pull(
     req: &Request,
     state: &WorkerState,
     cache_name: &str,
     is_public: bool,
 ) -> WorkerResult<()> {
-    let req_state = RequestState::from_request(req, &state.jwt_config)?;
+    let req_state = RequestState::from_request(req, state).await?;
 
     let cache_name_typed = attic::cache::CacheName::new(cache_name.to_string())
         .map_err(|e| WorkerError::BadRequest(format!("Invalid cache name: {}", e)))?;
@@ -60,7 +60,7 @@ pub async fn get_nix_cache_info(req: Request, ctx: RouteContext<()>) -> Result<R
         Err(e) => return Ok(e.to_response()),
     };
 
-    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public).await {
         return Ok(e.to_response());
     }
 
@@ -91,7 +91,7 @@ pub async fn head_nix_cache_info(req: Request, ctx: RouteContext<()>) -> Result<
         Err(e) => return Ok(e.to_response()),
     };
 
-    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public).await {
         return Ok(e.to_response());
     }
 
@@ -133,7 +133,7 @@ pub async fn get_store_path_info(req: Request, ctx: RouteContext<()>) -> Result<
         Err(e) => return Ok(e.to_response()),
     };
 
-    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public).await {
         return Ok(e.to_response());
     }
 
@@ -199,7 +199,7 @@ pub async fn head_store_path_info(req: Request, ctx: RouteContext<()>) -> Result
         Err(e) => return Ok(e.to_response()),
     };
 
-    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public).await {
         return Ok(e.to_response());
     }
 
@@ -245,7 +245,7 @@ pub async fn get_nar(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Ok(None) => return Response::error("Not found", 404),
         Err(e) => return Ok(e.to_response()),
     };
-    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public).await {
         return Ok(e.to_response());
     }
 
@@ -326,7 +326,7 @@ pub async fn head_nar(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Ok(None) => return Response::error("Not found", 404),
         Err(e) => return Ok(e.to_response()),
     };
-    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public).await {
         return Ok(e.to_response());
     }
 

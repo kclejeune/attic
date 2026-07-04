@@ -673,6 +673,25 @@ impl D1Backend {
         Ok(())
     }
 
+    /// Whether an admin-issued token (by `jti`) has been revoked.
+    ///
+    /// Returns false when no matching row exists (the token is not admin-tracked,
+    /// e.g. a bootstrap token) so only explicitly revoked tokens are rejected.
+    pub async fn is_token_revoked(&self, jti: &str) -> WorkerResult<bool> {
+        let stmt = self
+            .db
+            .prepare("SELECT revoked_at FROM api_token WHERE id = ?1")
+            .bind(&[jti.into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
+
+        let row = stmt
+            .first::<RevokedRow>(None)
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        Ok(row.and_then(|r| r.revoked_at).is_some())
+    }
+
     /// List pending uploads created before the given RFC3339 timestamp (for GC).
     pub async fn list_stale_pending_uploads(
         &self,
@@ -862,6 +881,11 @@ impl From<ObjectWithNarRow> for ObjectWithNar {
 #[derive(serde::Deserialize)]
 struct PathHashRow {
     store_path_hash: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RevokedRow {
+    revoked_at: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]

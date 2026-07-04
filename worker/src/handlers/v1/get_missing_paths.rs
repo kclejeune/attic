@@ -28,7 +28,7 @@ pub async fn get_missing_paths(mut req: Request, ctx: RouteContext<()>) -> Resul
         Err(e) => return Ok(e.to_response()),
     };
 
-    let req_state = match RequestState::from_request(&req, &state.jwt_config) {
+    let req_state = match RequestState::from_request(&req, &state).await {
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };

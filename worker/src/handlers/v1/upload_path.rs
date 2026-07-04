@@ -56,7 +56,7 @@ pub async fn upload_path(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
         Err(e) => return Ok(e.to_response()),
     };
 
-    let req_state = match RequestState::from_request(&req, &state.jwt_config) {
+    let req_state = match RequestState::from_request(&req, &state).await {
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };
@@ -1247,7 +1247,7 @@ pub async fn start_chunked_upload(mut req: Request, ctx: RouteContext<()>) -> Re
         Err(e) => return Ok(e.to_response()),
     };
 
-    let req_state = match RequestState::from_request(&req, &worker_state.jwt_config) {
+    let req_state = match RequestState::from_request(&req, &worker_state).await {
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };
@@ -1414,7 +1414,7 @@ pub async fn upload_chunk(mut req: Request, ctx: RouteContext<()>) -> Result<Res
         Err(e) => return Ok(e.to_response()),
     };
 
-    let req_state = match RequestState::from_request(&req, &worker_state.jwt_config) {
+    let req_state = match RequestState::from_request(&req, &worker_state).await {
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };
@@ -1550,7 +1550,7 @@ pub async fn complete_chunked_upload(mut req: Request, ctx: RouteContext<()>) ->
         Err(e) => return Ok(e.to_response()),
     };
 
-    let req_state = match RequestState::from_request(&req, &worker_state.jwt_config) {
+    let req_state = match RequestState::from_request(&req, &worker_state).await {
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };
