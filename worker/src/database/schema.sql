@@ -106,6 +106,20 @@ CREATE TABLE IF NOT EXISTS pending_upload (
 
 CREATE INDEX IF NOT EXISTS idx_pending_upload_created ON pending_upload(created_at);
 
+-- OAuth device-authorization grants for headless CLI login
+CREATE TABLE IF NOT EXISTS device_auth (
+    device_code TEXT PRIMARY KEY,
+    user_code TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | denied
+    scope TEXT,
+    user_id TEXT,
+    token TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_auth_user_code ON device_auth(user_code);
+
 -- Migrations tracking table
 CREATE TABLE IF NOT EXISTS _migrations (
     id TEXT PRIMARY KEY,

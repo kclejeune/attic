@@ -164,6 +164,18 @@ pub struct ObjectWithNar {
     pub nar: Nar,
 }
 
+/// An in-progress OAuth device-authorization grant (headless CLI login).
+#[derive(Debug, Clone)]
+pub struct DeviceAuth {
+    pub device_code: String,
+    pub user_code: String,
+    /// "pending" | "approved" | "denied"
+    pub status: String,
+    /// Minted token, populated once approved.
+    pub token: Option<String>,
+    pub expires_at: i64,
+}
+
 /// A chunk no longer referenced by any NAR, to be reclaimed by GC.
 #[derive(Debug, Clone)]
 pub struct OrphanChunk {

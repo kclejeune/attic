@@ -94,6 +94,10 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         )
         // Admin-triggered garbage collection
         .post_async("/_api/v1/gc", v1::gc::run_gc)
+        // CLI login discovery + device-authorization flow
+        .get_async("/_api/v1/auth-config", v1::auth_config::auth_config)
+        .post_async("/_api/v1/cli/device", v1::cli::device_start)
+        .post_async("/_api/v1/cli/token", v1::cli::device_token)
         .run(req, env)
         .await
 }

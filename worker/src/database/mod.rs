@@ -309,4 +309,47 @@ impl Database {
             Database::Turso(backend) => backend.touch_object(cache_name, store_path_hash).await,
         }
     }
+
+    /// Create a pending device-authorization grant.
+    pub async fn create_device_auth(
+        &self,
+        device_code: &str,
+        user_code: &str,
+        expires_at: i64,
+    ) -> WorkerResult<()> {
+        match self {
+            Database::D1(b) => {
+                b.create_device_auth(device_code, user_code, expires_at)
+                    .await
+            }
+            Database::Turso(b) => {
+                b.create_device_auth(device_code, user_code, expires_at)
+                    .await
+            }
+        }
+    }
+
+    /// Look up a device grant by its device_code.
+    pub async fn find_device_auth(&self, device_code: &str) -> WorkerResult<Option<DeviceAuth>> {
+        match self {
+            Database::D1(b) => b.find_device_auth(device_code).await,
+            Database::Turso(b) => b.find_device_auth(device_code).await,
+        }
+    }
+
+    /// Delete a device grant.
+    pub async fn delete_device_auth(&self, device_code: &str) -> WorkerResult<()> {
+        match self {
+            Database::D1(b) => b.delete_device_auth(device_code).await,
+            Database::Turso(b) => b.delete_device_auth(device_code).await,
+        }
+    }
+
+    /// GC: delete device grants past their expiry.
+    pub async fn delete_expired_device_auth(&self) -> WorkerResult<u64> {
+        match self {
+            Database::D1(b) => b.delete_expired_device_auth().await,
+            Database::Turso(b) => b.delete_expired_device_auth().await,
+        }
+    }
 }

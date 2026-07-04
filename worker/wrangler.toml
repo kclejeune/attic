@@ -28,6 +28,8 @@ database_id = "872ceec3-5438-4069-b3fa-69fbb66dd011"  # Replace with actual ID f
 
 # Environment variables
 [vars]
+# Base URL of the admin app, for CLI login discovery (/_api/v1/auth-config).
+CLI_AUTH_BASE_URL = "https://app.cache.kclj.io"
 # Set these for Turso database access
 # TURSO_URL = "libsql://your-db.turso.io"
 

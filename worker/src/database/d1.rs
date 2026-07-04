@@ -673,6 +673,76 @@ impl D1Backend {
         Ok(())
     }
 
+    /// Create a pending device-authorization grant.
+    pub async fn create_device_auth(
+        &self,
+        device_code: &str,
+        user_code: &str,
+        expires_at: i64,
+    ) -> WorkerResult<()> {
+        self.db
+            .prepare(
+                "INSERT INTO device_auth (device_code, user_code, status, created_at, expires_at) \
+                 VALUES (?1, ?2, 'pending', ?3, ?4)",
+            )
+            .bind(&[
+                device_code.into(),
+                user_code.into(),
+                (chrono::Utc::now().timestamp() as f64).into(),
+                (expires_at as f64).into(),
+            ])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+        Ok(())
+    }
+
+    /// Look up a device grant by its device_code (for CLI polling).
+    pub async fn find_device_auth(&self, device_code: &str) -> WorkerResult<Option<DeviceAuth>> {
+        let stmt = self
+            .db
+            .prepare(
+                "SELECT device_code, user_code, status, token, expires_at \
+                 FROM device_auth WHERE device_code = ?1",
+            )
+            .bind(&[device_code.into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
+        let row = stmt
+            .first::<DeviceAuthRow>(None)
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+        Ok(row.map(|r| r.into()))
+    }
+
+    /// Delete a device grant (after its token is retrieved, or on GC).
+    pub async fn delete_device_auth(&self, device_code: &str) -> WorkerResult<()> {
+        self.db
+            .prepare("DELETE FROM device_auth WHERE device_code = ?1")
+            .bind(&[device_code.into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+        Ok(())
+    }
+
+    /// GC: delete device grants past their expiry.
+    pub async fn delete_expired_device_auth(&self) -> WorkerResult<u64> {
+        let result = self
+            .db
+            .prepare("DELETE FROM device_auth WHERE expires_at < ?1")
+            .bind(&[(chrono::Utc::now().timestamp() as f64).into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+        let meta = result
+            .meta()
+            .map_err(|e| WorkerError::Database(format!("Meta error: {}", e)))?;
+        Ok(meta.and_then(|m| m.changes).unwrap_or(0) as u64)
+    }
+
     /// Delete objects whose cache has a retention period and which have aged out
     /// (by last access, falling back to creation time). Returns rows deleted.
     pub async fn delete_expired_objects(&self) -> WorkerResult<u64> {
@@ -1001,6 +1071,27 @@ struct RevokedRow {
 struct OrphanChunkRow {
     id: i64,
     remote_file: String,
+}
+
+#[derive(serde::Deserialize)]
+struct DeviceAuthRow {
+    device_code: String,
+    user_code: String,
+    status: String,
+    token: Option<String>,
+    expires_at: i64,
+}
+
+impl From<DeviceAuthRow> for DeviceAuth {
+    fn from(r: DeviceAuthRow) -> Self {
+        DeviceAuth {
+            device_code: r.device_code,
+            user_code: r.user_code,
+            status: r.status,
+            token: r.token,
+            expires_at: r.expires_at,
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]

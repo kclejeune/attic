@@ -33,6 +33,11 @@ pub async fn run(state: &WorkerState) -> GcStats {
     reap_expired_objects(state, &mut stats).await;
     reap_orphans(state, &mut stats).await;
 
+    // Expired device-authorization grants (best-effort).
+    if let Err(e) = state.database.delete_expired_device_auth().await {
+        console_log!("gc: device_auth cleanup failed: {}", e);
+    }
+
     stats
 }
 

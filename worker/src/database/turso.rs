@@ -644,6 +644,79 @@ impl TursoBackend {
         Ok(())
     }
 
+    /// Create a pending device-authorization grant.
+    pub async fn create_device_auth(
+        &self,
+        device_code: &str,
+        user_code: &str,
+        expires_at: i64,
+    ) -> WorkerResult<()> {
+        self.execute(
+            "INSERT INTO device_auth (device_code, user_code, status, created_at, expires_at) \
+             VALUES (?, ?, 'pending', ?, ?)",
+            vec![
+                serde_json::Value::String(device_code.to_string()),
+                serde_json::Value::String(user_code.to_string()),
+                serde_json::Value::Number(chrono::Utc::now().timestamp().into()),
+                serde_json::Value::Number(expires_at.into()),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Look up a device grant by its device_code (for CLI polling).
+    pub async fn find_device_auth(&self, device_code: &str) -> WorkerResult<Option<DeviceAuth>> {
+        let result = self
+            .execute(
+                "SELECT device_code, user_code, status, token, expires_at \
+                 FROM device_auth WHERE device_code = ?",
+                vec![serde_json::Value::String(device_code.to_string())],
+            )
+            .await?;
+        if let Some(rows) = result.rows {
+            if let Some(row) = rows.into_iter().next() {
+                let s = |i: usize| {
+                    row.get(i)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                return Ok(Some(DeviceAuth {
+                    device_code: s(0),
+                    user_code: s(1),
+                    status: s(2),
+                    token: row.get(3).and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    expires_at: row.get(4).and_then(|v| v.as_i64()).unwrap_or_default(),
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Delete a device grant.
+    pub async fn delete_device_auth(&self, device_code: &str) -> WorkerResult<()> {
+        self.execute(
+            "DELETE FROM device_auth WHERE device_code = ?",
+            vec![serde_json::Value::String(device_code.to_string())],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// GC: delete device grants past their expiry.
+    pub async fn delete_expired_device_auth(&self) -> WorkerResult<u64> {
+        let result = self
+            .execute(
+                "DELETE FROM device_auth WHERE expires_at < ?",
+                vec![serde_json::Value::Number(
+                    chrono::Utc::now().timestamp().into(),
+                )],
+            )
+            .await?;
+        Ok(result.rows_affected.unwrap_or(0))
+    }
+
     /// Retention GC: delete aged-out objects in caches with a retention period.
     pub async fn delete_expired_objects(&self) -> WorkerResult<u64> {
         let result = self
