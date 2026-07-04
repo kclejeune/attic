@@ -3,13 +3,45 @@
 use worker::*;
 
 use crate::crypto::{compute_fingerprint, convert_hash_to_base32, sign_message};
-use crate::error::WorkerError;
-use crate::state::WorkerState;
+use crate::error::{WorkerError, WorkerResult};
+use crate::state::{RequestState, WorkerState};
+
+/// Enforce pull permission for a cache, honoring public caches and anonymous access.
+///
+/// Mirrors the native server: an anonymous request starts with no permissions,
+/// public caches implicitly grant pull, and any bearer token contributes its
+/// granted permissions for the named cache.
+fn authorize_pull(
+    req: &Request,
+    state: &WorkerState,
+    cache_name: &str,
+    is_public: bool,
+) -> WorkerResult<()> {
+    let req_state = RequestState::from_request(req, &state.jwt_config)?;
+
+    let cache_name_typed = attic::cache::CacheName::new(cache_name.to_string())
+        .map_err(|e| WorkerError::BadRequest(format!("Invalid cache name: {}", e)))?;
+
+    let mut permission = match &req_state.token {
+        Some(token) => token.get_permission_for_cache(&cache_name_typed),
+        None => attic_token::CachePermission::default(),
+    };
+
+    if is_public {
+        permission.add_public_permissions();
+    }
+
+    permission
+        .require_pull()
+        .map_err(|e| WorkerError::Authorization(format!("Permission denied: {:?}", e)))?;
+
+    Ok(())
+}
 
 /// GET /:cache/nix-cache-info
 ///
 /// Returns basic cache information for Nix.
-pub async fn get_nix_cache_info(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn get_nix_cache_info(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
 
     let state = match WorkerState::from_env(&ctx.env) {
@@ -28,6 +60,10 @@ pub async fn get_nix_cache_info(_req: Request, ctx: RouteContext<()>) -> Result<
         Err(e) => return Ok(e.to_response()),
     };
 
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+        return Ok(e.to_response());
+    }
+
     // Build nix-cache-info response
     let info = format!(
         "StoreDir: {}\nWantMassQuery: 1\nPriority: {}\n",
@@ -40,7 +76,7 @@ pub async fn get_nix_cache_info(_req: Request, ctx: RouteContext<()>) -> Result<
 /// HEAD /:cache/nix-cache-info
 ///
 /// Returns headers only for cache info check.
-pub async fn head_nix_cache_info(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn head_nix_cache_info(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
 
     let state = match WorkerState::from_env(&ctx.env) {
@@ -49,18 +85,24 @@ pub async fn head_nix_cache_info(_req: Request, ctx: RouteContext<()>) -> Result
     };
 
     // Find the cache
-    match state.database.find_cache(&cache_name).await {
-        Ok(Some(_)) => Response::empty(),
-        Ok(None) => Response::error("Not found", 404),
-        Err(e) => Ok(e.to_response()),
+    let cache = match state.database.find_cache(&cache_name).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return Response::error("Not found", 404),
+        Err(e) => return Ok(e.to_response()),
+    };
+
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+        return Ok(e.to_response());
     }
+
+    Response::empty()
 }
 
 /// GET /:cache/:path
 ///
 /// Returns narinfo for a store path.
 /// Path format: <hash>.narinfo
-pub async fn get_store_path_info(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn get_store_path_info(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
     let path = ctx.param("path").unwrap_or(&String::new()).clone();
 
@@ -90,6 +132,10 @@ pub async fn get_store_path_info(_req: Request, ctx: RouteContext<()>) -> Result
         }
         Err(e) => return Ok(e.to_response()),
     };
+
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+        return Ok(e.to_response());
+    }
 
     // Find the object
     let obj = match state
@@ -122,7 +168,7 @@ pub async fn get_store_path_info(_req: Request, ctx: RouteContext<()>) -> Result
 /// HEAD /:cache/:path
 ///
 /// Returns headers only for narinfo existence check.
-pub async fn head_store_path_info(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn head_store_path_info(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
     let path = ctx.param("path").unwrap_or(&String::new()).clone();
 
@@ -143,8 +189,8 @@ pub async fn head_store_path_info(_req: Request, ctx: RouteContext<()>) -> Resul
     };
 
     // Find the cache
-    match state.database.find_cache(&cache_name).await {
-        Ok(Some(_)) => {}
+    let cache = match state.database.find_cache(&cache_name).await {
+        Ok(Some(c)) => c,
         Ok(None) => {
             return Ok(
                 WorkerError::NotFound(format!("Cache not found: {}", cache_name)).to_response(),
@@ -152,6 +198,10 @@ pub async fn head_store_path_info(_req: Request, ctx: RouteContext<()>) -> Resul
         }
         Err(e) => return Ok(e.to_response()),
     };
+
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+        return Ok(e.to_response());
+    }
 
     // Check if the object exists
     match state
@@ -173,8 +223,8 @@ pub async fn head_store_path_info(_req: Request, ctx: RouteContext<()>) -> Resul
 ///
 /// Returns the NAR file. For single-chunk NARs, redirects to R2.
 /// For multi-chunk NARs, streams the concatenated chunks.
-pub async fn get_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let _cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
+pub async fn get_nar(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
     let path = ctx.param("path").unwrap_or(&String::new()).clone();
 
     // Extract NAR hash from path
@@ -188,6 +238,16 @@ pub async fn get_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };
+
+    // Enforce pull permission for the named cache
+    let cache = match state.database.find_cache(&cache_name).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return Response::error("Not found", 404),
+        Err(e) => return Ok(e.to_response()),
+    };
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+        return Ok(e.to_response());
+    }
 
     // Find the NAR - try with sha256: prefix since that's how it's stored
     let nar_hash_with_prefix = format!("sha256:{}", nar_hash_raw);
@@ -245,7 +305,8 @@ pub async fn get_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
 /// HEAD /:cache/nar/:path
 ///
 /// Returns headers only for NAR file existence check.
-pub async fn head_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn head_nar(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
     let path = ctx.param("path").unwrap_or(&String::new()).clone();
 
     // Extract NAR hash from path
@@ -258,6 +319,16 @@ pub async fn head_nar(_req: Request, ctx: RouteContext<()>) -> Result<Response> 
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };
+
+    // Enforce pull permission for the named cache
+    let cache = match state.database.find_cache(&cache_name).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return Response::error("Not found", 404),
+        Err(e) => return Ok(e.to_response()),
+    };
+    if let Err(e) = authorize_pull(&req, &state, &cache_name, cache.is_public) {
+        return Ok(e.to_response());
+    }
 
     // Find the NAR
     let nar_hash_with_prefix = format!("sha256:{}", nar_hash_raw);
