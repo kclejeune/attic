@@ -60,18 +60,18 @@
 			<div>
 				<dt class="mb-1 text-xs text-muted-foreground">Substituter URL</dt>
 				<dd class="flex items-center gap-2">
-					<code class="min-w-0 flex-1 truncate rounded-md bg-muted px-3 py-2 font-mono text-xs">
-						{c.url}
-					</code>
+					<div class="flex h-9 min-w-0 flex-1 items-center rounded-md bg-muted px-3">
+						<code class="min-w-0 flex-1 truncate font-mono text-xs">{c.url}</code>
+					</div>
 					<CopyButton text={c.url} label="Copy URL" />
 				</dd>
 			</div>
 			<div>
 				<dt class="mb-1 text-xs text-muted-foreground">Trusted public key</dt>
 				<dd class="flex items-center gap-2">
-					<code class="min-w-0 flex-1 truncate rounded-md bg-muted px-3 py-2 font-mono text-xs">
-						{c.publicKey ?? 'unavailable'}
-					</code>
+					<div class="flex h-9 min-w-0 flex-1 items-center rounded-md bg-muted px-3">
+						<code class="min-w-0 flex-1 truncate font-mono text-xs">{c.publicKey ?? 'unavailable'}</code>
+					</div>
 					{#if c.publicKey}
 						<CopyButton text={c.publicKey} label="Copy public key" />
 					{/if}
