@@ -43,6 +43,7 @@
 		"fsevents@2.3.3": true
 	},
 	"dependencies": {
+		"@lucide/svelte": "^1.23.0",
 		"better-auth": "^1.6.23",
 		"clsx": "^2.1.1",
 		"drizzle-orm": "^0.45.2",
