@@ -1,7 +1,6 @@
 //! Turso/libSQL database backend via HTTP API.
 
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsCast;
 
 use super::models::*;
 use crate::error::{WorkerError, WorkerResult};
@@ -49,11 +48,16 @@ impl TursoBackend {
     }
 
     /// Execute a query and return raw results.
+    ///
+    /// Uses the Workers runtime `Fetch` API. (The DOM `fetch` via
+    /// `web_sys::window()` is unavailable in Workers — there is no `window`.)
     async fn execute(
         &self,
         sql: &str,
         params: Vec<serde_json::Value>,
     ) -> WorkerResult<TursoResult> {
+        use worker::{Fetch, Headers, Method, Request, RequestInit};
+
         let request = TursoRequest {
             statements: vec![TursoStatement {
                 q: sql.to_string(),
@@ -65,56 +69,43 @@ impl TursoBackend {
             }],
         };
 
-        let client = web_sys::window()
-            .ok_or_else(|| WorkerError::Internal("No window object".to_string()))?;
+        let body = serde_json::to_string(&request)
+            .map_err(|e| WorkerError::Database(format!("JSON error: {}", e)))?;
 
-        // Use fetch API
-        let opts = web_sys::RequestInit::new();
-        opts.set_method("POST");
-        opts.set_body(&wasm_bindgen::JsValue::from_str(
-            &serde_json::to_string(&request)
-                .map_err(|e| WorkerError::Database(format!("JSON error: {}", e)))?,
-        ));
-
-        let headers = web_sys::Headers::new()
-            .map_err(|e| WorkerError::Internal(format!("Headers error: {:?}", e)))?;
+        let mut headers = Headers::new();
         headers
             .set("Content-Type", "application/json")
             .map_err(|e| WorkerError::Internal(format!("Headers error: {:?}", e)))?;
         headers
             .set("Authorization", &format!("Bearer {}", self.auth_token))
             .map_err(|e| WorkerError::Internal(format!("Headers error: {:?}", e)))?;
-        opts.set_headers(&headers.into());
+
+        let mut init = RequestInit::new();
+        init.with_method(Method::Post)
+            .with_headers(headers)
+            .with_body(Some(wasm_bindgen::JsValue::from_str(&body)));
 
         let url = format!("{}/v2/pipeline", self.url);
-        let request = web_sys::Request::new_with_str_and_init(&url, &opts)
+        let req = Request::new_with_init(&url, &init)
             .map_err(|e| WorkerError::Internal(format!("Request error: {:?}", e)))?;
 
-        let promise = client.fetch_with_request(&request);
-        let resp_value = wasm_bindgen_futures::JsFuture::from(promise)
+        let mut resp = Fetch::Request(req)
+            .send()
             .await
             .map_err(|e| WorkerError::Database(format!("Fetch error: {:?}", e)))?;
 
-        let resp: web_sys::Response = resp_value
-            .dyn_into()
-            .map_err(|e| WorkerError::Internal(format!("Response cast error: {:?}", e)))?;
-
-        if !resp.ok() {
+        let status = resp.status_code();
+        if !(200..300).contains(&status) {
             return Err(WorkerError::Database(format!(
                 "Turso API error: {}",
-                resp.status()
+                status
             )));
         }
 
-        let json_promise = resp
+        let response: TursoResponse = resp
             .json()
-            .map_err(|e| WorkerError::Internal(format!("JSON promise error: {:?}", e)))?;
-        let json_value = wasm_bindgen_futures::JsFuture::from(json_promise)
             .await
-            .map_err(|e| WorkerError::Database(format!("JSON fetch error: {:?}", e)))?;
-
-        let response: TursoResponse = serde_wasm_bindgen::from_value(json_value)
-            .map_err(|e| WorkerError::Database(format!("JSON parse error: {}", e)))?;
+            .map_err(|e| WorkerError::Database(format!("JSON parse error: {:?}", e)))?;
 
         response
             .results
@@ -149,10 +140,14 @@ impl TursoBackend {
         cache_name: &str,
         store_path_hash: &str,
     ) -> WorkerResult<Option<ObjectWithNar>> {
-        // This is a simplified query - in production, we'd join all tables
         let result = self
             .execute(
-                "SELECT o.*, c.*, n.* FROM object o \
+                "SELECT o.id, o.cache_id, o.nar_id, o.store_path_hash, o.store_path, \
+                 o.refs, o.system, o.deriver, o.sigs, o.ca, o.created_at, \
+                 o.last_accessed_at, o.created_by, \
+                 n.id, n.state, n.nar_hash, n.nar_size, n.compression, \
+                 n.num_chunks, n.completeness_hint, n.holders_count, n.created_at \
+                 FROM object o \
                  INNER JOIN cache c ON o.cache_id = c.id \
                  INNER JOIN nar n ON o.nar_id = n.id \
                  WHERE c.name = ? AND c.deleted_at IS NULL \
@@ -164,9 +159,12 @@ impl TursoBackend {
             )
             .await?;
 
-        // TODO: Parse the joined result
-        // For now, return None as placeholder
-        let _ = result;
+        if let Some(rows) = result.rows {
+            if let Some(row) = rows.into_iter().next() {
+                return Ok(Some(parse_object_with_nar_row(&row)?));
+            }
+        }
+
         Ok(None)
     }
 
@@ -703,6 +701,60 @@ fn parse_pending_upload_row(row: &[serde_json::Value]) -> WorkerResult<PendingUp
     })
 }
 
+/// Parse a joined object+nar row (object columns 0-12, nar columns 13-21).
+fn parse_object_with_nar_row(row: &[serde_json::Value]) -> WorkerResult<ObjectWithNar> {
+    let s = |i: usize| {
+        row.get(i)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let opt_s = |i: usize| row.get(i).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let json_list = |i: usize| {
+        row.get(i)
+            .and_then(|v| v.as_str())
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default()
+    };
+
+    Ok(ObjectWithNar {
+        object: Object {
+            id: row.get(0).and_then(|v| v.as_i64()),
+            cache_id: row.get(1).and_then(|v| v.as_i64()).unwrap_or_default(),
+            nar_id: row.get(2).and_then(|v| v.as_i64()).unwrap_or_default(),
+            store_path_hash: s(3),
+            store_path: s(4),
+            references: json_list(5),
+            system: opt_s(6),
+            deriver: opt_s(7),
+            sigs: json_list(8),
+            ca: opt_s(9),
+            created_at: s(10),
+            last_accessed_at: opt_s(11),
+            created_by: opt_s(12),
+        },
+        nar: Nar {
+            id: row.get(13).and_then(|v| v.as_i64()),
+            state: row
+                .get(14)
+                .and_then(|v| v.as_str())
+                .and_then(NarState::from_str)
+                .unwrap_or(NarState::Valid),
+            nar_hash: s(15),
+            nar_size: row.get(16).and_then(|v| v.as_i64()).unwrap_or_default(),
+            compression: row
+                .get(17)
+                .and_then(|v| v.as_str())
+                .unwrap_or("none")
+                .to_string(),
+            num_chunks: row.get(18).and_then(|v| v.as_i64()).unwrap_or(1) as i32,
+            completeness_hint: row.get(19).and_then(|v| v.as_bool()).unwrap_or(false),
+            holders_count: row.get(20).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            created_at: s(21),
+        },
+    })
+}
+
 /// Parse a cache row from query results.
 fn parse_cache_row(row: &[serde_json::Value]) -> WorkerResult<Cache> {
     Ok(Cache {
@@ -779,7 +831,11 @@ fn parse_nar_row(row: &[serde_json::Value]) -> WorkerResult<Nar> {
 fn parse_chunk_row(row: &[serde_json::Value]) -> WorkerResult<Chunk> {
     Ok(Chunk {
         id: row.get(0).and_then(|v| v.as_i64()),
-        state: ChunkState::Valid, // TODO: parse from row
+        state: row
+            .get(1)
+            .and_then(|v| v.as_str())
+            .and_then(ChunkState::from_str)
+            .unwrap_or(ChunkState::Valid),
         chunk_hash: row
             .get(2)
             .and_then(|v| v.as_str())
