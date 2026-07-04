@@ -12,15 +12,15 @@ use crate::config::{Config, ServerConfig, ServerTokenConfig};
 /// Log into an Attic server.
 #[derive(Debug, Parser)]
 pub struct Login {
-    /// Name of the server.
-    name: ServerName,
-
     /// Endpoint of the server.
     endpoint: String,
 
-    /// Access token.
-    ///
-    /// Omit this and pass --web or --device to obtain one interactively.
+    /// Name for this server in your config.
+    #[clap(long, default_value = "default")]
+    server: ServerName,
+
+    /// Access token (for manual login; prefer --web or --device).
+    #[clap(long)]
     token: Option<String>,
 
     /// Set the server as the default.
@@ -50,8 +50,8 @@ pub async fn run(opts: Opts) -> Result<()> {
     let mut config = Config::load()?;
     let mut config_m = config.as_mut();
 
-    if let Some(server) = config_m.servers.get_mut(&sub.name) {
-        eprintln!("✍️ Overwriting server \"{}\"", sub.name.as_str());
+    if let Some(server) = config_m.servers.get_mut(&sub.server) {
+        eprintln!("✍️ Overwriting server \"{}\"", sub.server.as_str());
         server.endpoint = sub.endpoint.to_owned();
         if let Some(token) = &token {
             server.token = Some(ServerTokenConfig::Raw {
@@ -59,9 +59,9 @@ pub async fn run(opts: Opts) -> Result<()> {
             });
         }
     } else {
-        eprintln!("✍️ Configuring server \"{}\"", sub.name.as_str());
+        eprintln!("✍️ Configuring server \"{}\"", sub.server.as_str());
         config_m.servers.insert(
-            sub.name.to_owned(),
+            sub.server.to_owned(),
             ServerConfig {
                 endpoint: sub.endpoint.to_owned(),
                 token: token.clone().map(|token| ServerTokenConfig::Raw { token }),
@@ -69,12 +69,14 @@ pub async fn run(opts: Opts) -> Result<()> {
         );
     }
 
-    if sub.set_default || config_m.servers.len() == 1 {
-        config_m.default_server = Some(sub.name.to_owned());
+    // Default to this server when it's the only one, when explicitly requested,
+    // or when it carries the conventional "default" name.
+    if sub.set_default || config_m.servers.len() == 1 || sub.server.as_str() == "default" {
+        config_m.default_server = Some(sub.server.to_owned());
     }
 
     if token.is_some() {
-        eprintln!("✅ Logged in to \"{}\"", sub.name.as_str());
+        eprintln!("✅ Logged in to \"{}\"", sub.server.as_str());
     }
 
     Ok(())
