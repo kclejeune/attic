@@ -10,6 +10,23 @@ interface CacheRow {
 	compression: string;
 	retention_period: number | null;
 	store_dir: string;
+	keypair: string;
+}
+
+/** Keypair is stored as `{name}:{base64(secret32 || public32)}`; return the Nix trusted-key form. */
+function derivePublicKey(keypair: string): string | null {
+	const idx = keypair.indexOf(':');
+	if (idx < 0) return null;
+	const name = keypair.slice(0, idx);
+	try {
+		const raw = Uint8Array.from(atob(keypair.slice(idx + 1)), (c) => c.charCodeAt(0));
+		if (raw.length < 64) return null;
+		let bin = '';
+		for (const b of raw.slice(32, 64)) bin += String.fromCharCode(b);
+		return `${name}:${btoa(bin)}`;
+	} catch {
+		return null;
+	}
 }
 
 interface PathRow {
@@ -28,13 +45,16 @@ export const load: PageServerLoad = async ({ platform, params, url }) => {
 
 	const cache = await db
 		.prepare(
-			`SELECT name, is_public, priority, compression, retention_period, store_dir
+			`SELECT name, is_public, priority, compression, retention_period, store_dir, keypair
 			 FROM cache WHERE name = ?1 AND deleted_at IS NULL`
 		)
 		.bind(params.name)
 		.first<CacheRow>();
 
 	if (!cache) throw error(404, `Cache "${params.name}" not found`);
+
+	const cacheBase = (platform?.env.CACHE_BASE_URL ?? 'https://cache.kclj.io').replace(/\/$/, '');
+	const publicKey = derivePublicKey(cache.keypair);
 
 	const [{ results: paths }, totals] = await Promise.all([
 		db
@@ -66,7 +86,9 @@ export const load: PageServerLoad = async ({ platform, params, url }) => {
 			priority: cache.priority,
 			compression: cache.compression,
 			retentionDays: cache.retention_period,
-			storeDir: cache.store_dir
+			storeDir: cache.store_dir,
+			url: `${cacheBase}/${cache.name}`,
+			publicKey
 		},
 		paths: paths.map((p) => ({
 			storePath: p.store_path,

@@ -1,8 +1,8 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { RequestEvent } from '@sveltejs/kit';
 import { getDb, schema } from '$lib/server/db';
-import type { SessionUser } from './types';
+import type { SessionUser, UserRole } from './types';
 
 type Env = App.Platform['env'];
 
@@ -65,25 +65,35 @@ async function upsertAccessUser(
 	const id = `cfaccess:${identity.sub}`;
 	const now = new Date();
 
+	// Bootstrap: the deployment's first user (and any user while no admin exists)
+	// is promoted to admin so there is always someone who can manage the rest.
+	const adminExists = await hasAdmin(env);
+
 	const existing = await db.select().from(schema.user).where(eq(schema.user.id, id)).limit(1);
 	if (existing.length > 0) {
 		const u = existing[0];
+		let role = (u.role as UserRole) ?? 'member';
+		if (role === 'member' && !adminExists) {
+			await db.update(schema.user).set({ role: 'admin' }).where(eq(schema.user.id, id));
+			role = 'admin';
+		}
 		return {
 			id: u.id,
 			sub: identity.sub,
 			provider: 'cf-access',
 			email: u.email,
 			name: u.name,
-			role: (u.role as SessionUser['role']) ?? 'member'
+			role
 		};
 	}
 
+	const role: UserRole = adminExists ? 'member' : 'admin';
 	await db.insert(schema.user).values({
 		id,
 		name: identity.name ?? identity.email ?? identity.sub,
 		email: identity.email ?? `${identity.sub}@cf-access.local`,
 		emailVerified: true,
-		role: 'member',
+		role,
 		createdAt: now,
 		updatedAt: now
 	});
@@ -94,6 +104,15 @@ async function upsertAccessUser(
 		provider: 'cf-access',
 		email: identity.email,
 		name: identity.name,
-		role: 'member'
+		role
 	};
+}
+
+async function hasAdmin(env: Env): Promise<boolean> {
+	const db = getDb(env.ATTIC_DB);
+	const rows = await db
+		.select({ n: sql<number>`count(*)` })
+		.from(schema.user)
+		.where(eq(schema.user.role, 'admin'));
+	return (rows[0]?.n ?? 0) > 0;
 }

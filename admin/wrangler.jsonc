@@ -18,6 +18,7 @@
 
   "vars": {
     "APP_URL": "https://app.cache.kclj.io",
+    "CACHE_BASE_URL": "https://cache.kclj.io",
     "CF_ACCESS_TEAM_DOMAIN": "https://kclejeune.cloudflareaccess.com",
     "CF_ACCESS_AUD": "623b56c404ad5907aad2ee0e6255d7c88f6e9aecf64ee2aca77090153c115217"
   },

@@ -1,10 +1,17 @@
 <script lang="ts">
 	import { formatBytes, formatCount } from '$lib/format';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import CopyButton from '$lib/components/copy-button.svelte';
 	import { ArrowLeft, Lock, Globe, ChevronLeft, ChevronRight } from '@lucide/svelte';
 
 	let { data } = $props();
 	const c = $derived(data.cache);
+
+	const nixConf = $derived(
+		c.publicKey
+			? `extra-substituters = ${c.url}\nextra-trusted-public-keys = ${c.publicKey}`
+			: `extra-substituters = ${c.url}`
+	);
 
 	function shortHash(path: string): string {
 		// Trim the /nix/store/<hash>- prefix for readability; keep the human name.
@@ -41,6 +48,47 @@
 		</div>
 		<Button variant="outline" href="/caches/{c.name}/settings">Configure</Button>
 	</header>
+
+	<section class="mb-8 rounded-lg border bg-card p-5">
+		<h2 class="text-sm font-medium">Trust this cache</h2>
+		<p class="mt-1 text-sm text-muted-foreground">
+			Add to <span class="font-mono">nix.conf</span>, or a flake's
+			<span class="font-mono">nixConfig</span>, to pull from this cache.
+		</p>
+
+		<dl class="mt-4 space-y-3">
+			<div>
+				<dt class="mb-1 text-xs text-muted-foreground">Substituter URL</dt>
+				<dd class="flex items-center gap-2">
+					<code class="min-w-0 flex-1 truncate rounded-md bg-muted px-3 py-2 font-mono text-xs">
+						{c.url}
+					</code>
+					<CopyButton text={c.url} label="Copy URL" />
+				</dd>
+			</div>
+			<div>
+				<dt class="mb-1 text-xs text-muted-foreground">Trusted public key</dt>
+				<dd class="flex items-center gap-2">
+					<code class="min-w-0 flex-1 truncate rounded-md bg-muted px-3 py-2 font-mono text-xs">
+						{c.publicKey ?? 'unavailable'}
+					</code>
+					{#if c.publicKey}
+						<CopyButton text={c.publicKey} label="Copy public key" />
+					{/if}
+				</dd>
+			</div>
+		</dl>
+
+		<div class="mt-4">
+			<div class="mb-1 flex items-center justify-between">
+				<span class="text-xs text-muted-foreground">nix.conf</span>
+				<CopyButton text={nixConf} label="Copy nix.conf snippet" />
+			</div>
+			<pre class="overflow-x-auto rounded-md bg-muted px-3 py-2.5 font-mono text-xs"><code
+					>{nixConf}</code
+				></pre>
+		</div>
+	</section>
 
 	<div class="mb-3 flex items-baseline justify-between">
 		<h2 class="text-sm font-medium">Store paths</h2>

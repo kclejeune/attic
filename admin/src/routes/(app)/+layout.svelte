@@ -1,15 +1,17 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { toggleMode, mode } from 'mode-watcher';
 	import { authClient } from '$lib/auth-client';
-	import { LayoutDashboard, Boxes, KeyRound, LogOut } from '@lucide/svelte';
+	import { LayoutDashboard, Boxes, KeyRound, Users, LogOut, Sun, Moon } from '@lucide/svelte';
 
 	let { children, data } = $props();
 
 	const nav = [
 		{ href: '/', label: 'Overview', icon: LayoutDashboard },
 		{ href: '/caches', label: 'Caches', icon: Boxes },
-		{ href: '/tokens', label: 'Tokens', icon: KeyRound }
+		{ href: '/tokens', label: 'Tokens', icon: KeyRound },
+		{ href: '/users', label: 'Users', icon: Users }
 	];
 
 	function isActive(href: string): boolean {
@@ -56,6 +58,16 @@
 		</nav>
 
 		<div class="border-t border-sidebar-border p-3">
+			<button
+				onclick={toggleMode}
+				class="mb-1 flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+			>
+				{#if mode.current === 'dark'}
+					<Sun class="size-4" /> Light mode
+				{:else}
+					<Moon class="size-4" /> Dark mode
+				{/if}
+			</button>
 			<div class="flex items-center gap-2.5 px-2 py-1.5">
 				<div
 					class="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground"
