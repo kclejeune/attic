@@ -17,6 +17,7 @@ mod compression;
 mod crypto;
 mod database;
 mod error;
+mod gc;
 mod handlers;
 mod state;
 mod storage;
@@ -25,6 +26,7 @@ mod streaming;
 use worker::*;
 
 use crate::handlers::{binary_cache, v1};
+use crate::state::WorkerState;
 
 /// Main entry point for the Cloudflare Worker.
 #[event(fetch)]
@@ -92,4 +94,25 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         )
         .run(req, env)
         .await
+}
+
+/// Scheduled (cron) entry point for garbage collection.
+#[event(scheduled)]
+async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
+    console_error_panic_hook::set_once();
+
+    let state = match WorkerState::from_env(&env) {
+        Ok(s) => s,
+        Err(e) => {
+            console_log!("gc: failed to build worker state: {}", e);
+            return;
+        }
+    };
+
+    let stats = gc::run(&state).await;
+    console_log!(
+        "gc: reaped {} abandoned uploads ({} errors)",
+        stats.abandoned_uploads_reaped,
+        stats.abandoned_upload_errors
+    );
 }
