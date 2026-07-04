@@ -5,6 +5,17 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Outcome of a cache rename.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameOutcome {
+    /// The cache was renamed.
+    Renamed,
+    /// The source cache does not exist.
+    NotFound,
+    /// The target name is already taken (by a live or soft-deleted cache).
+    Conflict,
+}
+
 /// Cache model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cache {

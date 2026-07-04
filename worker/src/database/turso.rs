@@ -562,6 +562,38 @@ impl TursoBackend {
         Ok(result.rows_affected.unwrap_or(0) > 0)
     }
 
+    /// Rename a cache, keeping its keypair (and thus its signing key name) intact.
+    ///
+    /// The target name is rejected if any cache — live or soft-deleted — already
+    /// holds it, since `name` is globally unique.
+    pub async fn rename_cache(&self, old: &str, new: &str) -> WorkerResult<RenameOutcome> {
+        let taken = self
+            .execute(
+                "SELECT 1 FROM cache WHERE name = ?",
+                vec![serde_json::Value::String(new.to_string())],
+            )
+            .await?;
+        if taken.rows.map(|r| !r.is_empty()).unwrap_or(false) {
+            return Ok(RenameOutcome::Conflict);
+        }
+
+        let result = self
+            .execute(
+                "UPDATE cache SET name = ? WHERE name = ? AND deleted_at IS NULL",
+                vec![
+                    serde_json::Value::String(new.to_string()),
+                    serde_json::Value::String(old.to_string()),
+                ],
+            )
+            .await?;
+
+        Ok(if result.rows_affected.unwrap_or(0) > 0 {
+            RenameOutcome::Renamed
+        } else {
+            RenameOutcome::NotFound
+        })
+    }
+
     /// Insert a new pending chunked-upload row.
     pub async fn create_pending_upload(&self, upload: &PendingUpload) -> WorkerResult<()> {
         self.execute(

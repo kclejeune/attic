@@ -575,6 +575,44 @@ impl D1Backend {
         Ok(rows_affected > 0)
     }
 
+    /// Rename a cache, keeping its keypair (and thus its signing key name) intact.
+    ///
+    /// The target name is rejected if any cache — live or soft-deleted — already
+    /// holds it, since `name` is globally unique.
+    pub async fn rename_cache(&self, old: &str, new: &str) -> WorkerResult<RenameOutcome> {
+        let taken = self
+            .db
+            .prepare("SELECT 1 FROM cache WHERE name = ?1")
+            .bind(&[new.into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?
+            .first::<serde_json::Value>(None)
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+        if taken.is_some() {
+            return Ok(RenameOutcome::Conflict);
+        }
+
+        let stmt = self
+            .db
+            .prepare("UPDATE cache SET name = ?1 WHERE name = ?2 AND deleted_at IS NULL")
+            .bind(&[new.into(), old.into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
+
+        let meta = stmt
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?
+            .meta()
+            .map_err(|e| WorkerError::Database(format!("Meta error: {}", e)))?;
+
+        let rows_affected = meta.and_then(|m| m.changes).unwrap_or(0) as u64;
+        Ok(if rows_affected > 0 {
+            RenameOutcome::Renamed
+        } else {
+            RenameOutcome::NotFound
+        })
+    }
+
     /// Insert a new pending chunked-upload row.
     pub async fn create_pending_upload(&self, upload: &PendingUpload) -> WorkerResult<()> {
         let stmt = self

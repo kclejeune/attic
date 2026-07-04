@@ -205,6 +205,14 @@ impl Database {
         }
     }
 
+    /// Rename a cache, preserving its keypair.
+    pub async fn rename_cache(&self, old: &str, new: &str) -> WorkerResult<RenameOutcome> {
+        match self {
+            Database::D1(backend) => backend.rename_cache(old, new).await,
+            Database::Turso(backend) => backend.rename_cache(old, new).await,
+        }
+    }
+
     /// Insert a new pending chunked-upload row.
     pub async fn create_pending_upload(&self, upload: &PendingUpload) -> WorkerResult<()> {
         match self {

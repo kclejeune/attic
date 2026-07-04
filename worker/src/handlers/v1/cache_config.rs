@@ -341,6 +341,86 @@ pub async fn destroy_cache(req: Request, ctx: RouteContext<()>) -> Result<Respon
     }
 }
 
+/// POST /_api/v1/cache-config/:cache/rename
+///
+/// Renames a cache. The keypair (and thus the signing key name of already-pushed
+/// paths) is preserved, so existing signatures remain valid.
+pub async fn rename_cache(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let cache_name = ctx.param("cache").unwrap_or(&String::new()).clone();
+
+    let state = match WorkerState::from_env(&ctx.env) {
+        Ok(s) => s,
+        Err(e) => return Ok(e.to_response()),
+    };
+
+    let req_state = match RequestState::from_request(&req, &state).await {
+        Ok(s) => s,
+        Err(e) => return Ok(e.to_response()),
+    };
+
+    let token = match req_state.token {
+        Some(t) => t,
+        None => {
+            return Ok(WorkerError::Authentication("No token provided".to_string()).to_response())
+        }
+    };
+
+    #[derive(Deserialize)]
+    struct RenameRequest {
+        new_name: String,
+    }
+    let body: RenameRequest = req
+        .json()
+        .await
+        .map_err(|e| worker::Error::RustError(format!("Invalid JSON: {}", e)))?;
+
+    let from = attic::cache::CacheName::new(cache_name.clone())
+        .map_err(|e| WorkerError::BadRequest(format!("Invalid cache name: {}", e)))?;
+    let to = attic::cache::CacheName::new(body.new_name.clone())
+        .map_err(|e| WorkerError::BadRequest(format!("Invalid cache name: {}", e)))?;
+
+    // Renaming is a configure on the source and a create on the destination name.
+    let from_perm = token.get_permission_for_cache(&from);
+    if from_perm.require_configure_cache().is_err() && from_perm.require_create_cache().is_err() {
+        return Ok(WorkerError::Authorization(
+            "Permission denied: requires configure or create cache permission".to_string(),
+        )
+        .to_response());
+    }
+    if let Err(e) = token.get_permission_for_cache(&to).require_create_cache() {
+        return Ok(WorkerError::Authorization(format!(
+            "Permission denied for target name: {:?}",
+            e
+        ))
+        .to_response());
+    }
+
+    if cache_name == body.new_name {
+        return Ok(WorkerError::BadRequest("New name matches the current name".to_string())
+            .to_response());
+    }
+
+    match state.database.rename_cache(&cache_name, &body.new_name).await {
+        Ok(crate::database::RenameOutcome::Renamed) => {
+            let response = serde_json::json!({
+                "name": body.new_name,
+                "renamed_from": cache_name,
+                "renamed": true,
+            });
+            Response::from_json(&response)
+        }
+        Ok(crate::database::RenameOutcome::NotFound) => {
+            Ok(WorkerError::NotFound(format!("Cache not found: {}", cache_name)).to_response())
+        }
+        Ok(crate::database::RenameOutcome::Conflict) => Ok(WorkerError::Conflict(format!(
+            "A cache named \"{}\" already exists",
+            body.new_name
+        ))
+        .to_response()),
+        Err(e) => Ok(e.to_response()),
+    }
+}
+
 /// Validate compression type string using the shared CompressionType.
 fn validate_compression(compression: &str) -> std::result::Result<String, String> {
     use attic::compression::CompressionType;

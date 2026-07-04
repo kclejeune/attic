@@ -78,6 +78,10 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             v1::cache_config::destroy_cache,
         )
         .post_async(
+            "/_api/v1/cache-config/:cache/rename",
+            v1::cache_config::rename_cache,
+        )
+        .post_async(
             "/_api/v1/get-missing-paths",
             v1::get_missing_paths::get_missing_paths,
         )

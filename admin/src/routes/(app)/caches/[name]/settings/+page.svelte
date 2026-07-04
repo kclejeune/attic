@@ -3,11 +3,13 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
-	import { ArrowLeft, Check } from '@lucide/svelte';
+	import { ArrowLeft, Check, Trash2 } from '@lucide/svelte';
 
 	let { data, form } = $props();
 	const c = $derived(data.cache);
 	let submitting = $state(false);
+	let renaming = $state(false);
+	let deleting = $state(false);
 </script>
 
 <div class="mx-auto max-w-xl px-8 py-8">
@@ -27,6 +29,7 @@
 
 	<form
 		method="POST"
+		action="?/save"
 		use:enhance={() => {
 			submitting = true;
 			return async ({ update }) => {
@@ -94,4 +97,71 @@
 			{/if}
 		</div>
 	</form>
+
+	<hr class="my-10 border-border" />
+
+	<section class="space-y-4">
+		<div>
+			<h2 class="text-sm font-medium">Rename cache</h2>
+			<p class="mt-1 text-sm text-muted-foreground">
+				The signing key is preserved, so already-pushed paths stay trusted. The pull URL changes to
+				the new name.
+			</p>
+		</div>
+		<form
+			method="POST"
+			action="?/rename"
+			use:enhance={() => {
+				renaming = true;
+				return async ({ update }) => {
+					await update({ reset: false });
+					renaming = false;
+				};
+			}}
+			class="flex flex-wrap items-end gap-3"
+		>
+			<div class="min-w-56 flex-1 space-y-2">
+				<Label for="new_name">New name</Label>
+				<Input id="new_name" name="new_name" value={c.name} autocomplete="off" />
+			</div>
+			<Button type="submit" variant="outline" disabled={renaming}>
+				{renaming ? 'Renaming…' : 'Rename'}
+			</Button>
+		</form>
+		{#if form?.renameError}
+			<p class="text-sm text-destructive">{form.renameError}</p>
+		{/if}
+	</section>
+
+	<div class="mt-10 rounded-lg border border-destructive/40 p-5">
+		<h2 class="text-sm font-medium text-destructive">Danger zone</h2>
+		<p class="mt-1 text-sm text-muted-foreground">
+			Deleting removes the cache and hides its paths. Stored data is retained but the cache is no
+			longer reachable.
+		</p>
+		<form
+			method="POST"
+			action="?/delete"
+			class="mt-4"
+			use:enhance={({ cancel }) => {
+				if (!confirm(`Delete cache "${c.name}"? Clients can no longer pull from it.`)) {
+					cancel();
+					return;
+				}
+				deleting = true;
+				return async ({ update }) => {
+					await update();
+					deleting = false;
+				};
+			}}
+		>
+			<Button type="submit" variant="destructive" disabled={deleting}>
+				<Trash2 class="size-4" />
+				{deleting ? 'Deleting…' : 'Delete cache'}
+			</Button>
+		</form>
+		{#if form?.deleteError}
+			<p class="mt-3 text-sm text-destructive">{form.deleteError}</p>
+		{/if}
+	</div>
 </div>

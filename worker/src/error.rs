@@ -26,6 +26,9 @@ pub enum WorkerError {
     /// Bad request (invalid input).
     BadRequest(String),
 
+    /// Conflict (e.g. a name that is already taken).
+    Conflict(String),
+
     /// Storage error (R2 operations).
     Storage(String),
 
@@ -47,6 +50,7 @@ impl fmt::Display for WorkerError {
             WorkerError::Authorization(msg) => write!(f, "Authorization error: {}", msg),
             WorkerError::NotFound(msg) => write!(f, "Not found: {}", msg),
             WorkerError::BadRequest(msg) => write!(f, "Bad request: {}", msg),
+            WorkerError::Conflict(msg) => write!(f, "Conflict: {}", msg),
             WorkerError::Storage(msg) => write!(f, "Storage error: {}", msg),
             WorkerError::Database(msg) => write!(f, "Database error: {}", msg),
             WorkerError::Compression(msg) => write!(f, "Compression error: {}", msg),
@@ -73,6 +77,7 @@ impl WorkerError {
             WorkerError::Authorization(_) => 403,
             WorkerError::NotFound(_) => 404,
             WorkerError::BadRequest(_) => 400,
+            WorkerError::Conflict(_) => 409,
             WorkerError::Storage(_) => 502,
             WorkerError::Database(_) => 502,
             WorkerError::Compression(_) => 500,
@@ -88,6 +93,7 @@ impl WorkerError {
             WorkerError::Authorization(_) => "AuthorizationError",
             WorkerError::NotFound(_) => "NotFound",
             WorkerError::BadRequest(_) => "BadRequest",
+            WorkerError::Conflict(_) => "Conflict",
             WorkerError::Storage(_) => "StorageError",
             WorkerError::Database(_) => "DatabaseError",
             WorkerError::Compression(_) => "CompressionError",
