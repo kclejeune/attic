@@ -67,8 +67,9 @@ async function upsertAccessUser(
 	const now = new Date();
 
 	// Bootstrap: the deployment's first user (and any user while no admin exists)
-	// is promoted to admin so there is always someone who can manage the rest.
-	const adminExists = await hasAdmin(env);
+	// is promoted to admin so there is always someone who can manage the rest. The
+	// very first user also becomes the protected owner.
+	const [adminExists, anyUser] = await Promise.all([hasAdmin(env), hasAnyUser(env)]);
 
 	// Match by email first so a pre-provisioned (invited) account adopts its
 	// assigned role instead of colliding on the unique email; fall back to the
@@ -101,6 +102,7 @@ async function upsertAccessUser(
 		email,
 		emailVerified: true,
 		role,
+		isOwner: !anyUser,
 		createdAt: now,
 		updatedAt: now
 	});
@@ -121,5 +123,11 @@ async function hasAdmin(env: Env): Promise<boolean> {
 		.select({ n: sql<number>`count(*)` })
 		.from(schema.user)
 		.where(eq(schema.user.role, 'admin'));
+	return (rows[0]?.n ?? 0) > 0;
+}
+
+async function hasAnyUser(env: Env): Promise<boolean> {
+	const db = getDb(env.ATTIC_DB);
+	const rows = await db.select({ n: sql<number>`count(*)` }).from(schema.user);
 	return (rows[0]?.n ?? 0) > 0;
 }

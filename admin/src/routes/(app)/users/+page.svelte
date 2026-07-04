@@ -11,22 +11,26 @@
 	let error = $state('');
 	let adding = $state(false);
 
-	async function setRole(userId: string, role: 'admin' | 'member') {
+	async function post(action: string, fields: Record<string, string>, failMsg: string) {
 		error = '';
 		const body = new FormData();
-		body.set('userId', userId);
-		body.set('role', role);
-		const res = await fetch('?/setRole', { method: 'POST', body });
+		for (const [k, v] of Object.entries(fields)) body.set(k, v);
+		const res = await fetch(`?/${action}`, { method: 'POST', body });
 		if (!res.ok) {
-			error = 'Failed to update role.';
+			error = failMsg;
 			return;
 		}
 		await invalidateAll();
 	}
 
+	const setRole = (userId: string, role: 'admin' | 'member') =>
+		post('setRole', { userId, role }, 'Failed to update role.');
+	const setOwner = (userId: string, owner: boolean) =>
+		post('setOwner', { userId, owner: String(owner) }, 'Failed to update owner.');
+
 	function protectedReason(u: (typeof data.users)[number]): string | null {
-		if (u.isOwner) return 'The owner account cannot be deleted';
 		if (u.id === data.currentUserId) return 'You cannot delete your own account';
+		if (u.isOwner && data.lastOwner) return 'Add another owner before deleting the last one';
 		return null;
 	}
 </script>
@@ -141,11 +145,24 @@
 											Make admin
 										</DropdownMenu.Item>
 										<DropdownMenu.Item
-											disabled={u.role === 'member'}
+											disabled={u.role === 'member' || u.isOwner}
 											onSelect={() => setRole(u.id, 'member')}
 										>
 											Make member
 										</DropdownMenu.Item>
+										<DropdownMenu.Separator />
+										{#if u.isOwner}
+											<DropdownMenu.Item
+												disabled={data.lastOwner}
+												onSelect={() => setOwner(u.id, false)}
+											>
+												Remove owner
+											</DropdownMenu.Item>
+										{:else}
+											<DropdownMenu.Item onSelect={() => setOwner(u.id, true)}>
+												Make owner
+											</DropdownMenu.Item>
+										{/if}
 									</DropdownMenu.Content>
 								</DropdownMenu.Root>
 

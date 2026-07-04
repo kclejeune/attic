@@ -12,6 +12,8 @@ export const user = sqliteTable('user', {
 	image: text('image'),
 	// Admin-specific additional field (declared in auth config too).
 	role: text('role').notNull().default('member'),
+	// Exactly-protected owner(s); at least one must always exist.
+	isOwner: integer('is_owner', { mode: 'boolean' }).notNull().default(false),
 	createdAt: integer('createdAt', { mode: 'timestamp' }).notNull(),
 	updatedAt: integer('updatedAt', { mode: 'timestamp' }).notNull()
 });

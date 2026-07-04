@@ -7,6 +7,7 @@ interface UserRow {
 	name: string;
 	email: string;
 	role: string;
+	is_owner: number;
 	createdAt: number;
 }
 
@@ -15,12 +16,19 @@ function requireAdmin(locals: App.Locals) {
 	if (locals.user.role !== 'admin') throw error(403, 'Admins only');
 }
 
-/** The protected owner is the first account created. */
-async function ownerId(db: D1Database): Promise<string | null> {
+async function ownerCount(db: D1Database): Promise<number> {
 	const row = await db
-		.prepare('SELECT id FROM user ORDER BY createdAt LIMIT 1')
-		.first<{ id: string }>();
-	return row?.id ?? null;
+		.prepare('SELECT count(*) AS n FROM user WHERE is_owner = 1')
+		.first<{ n: number }>();
+	return row?.n ?? 0;
+}
+
+async function isOwner(db: D1Database, userId: string): Promise<boolean> {
+	const row = await db
+		.prepare('SELECT is_owner FROM user WHERE id = ?1')
+		.bind(userId)
+		.first<{ is_owner: number }>();
+	return row?.is_owner === 1;
 }
 
 export const load: PageServerLoad = async ({ platform, locals }) => {
@@ -29,19 +37,24 @@ export const load: PageServerLoad = async ({ platform, locals }) => {
 	if (!db) throw error(500, 'Database binding unavailable');
 
 	const { results } = await db
-		.prepare('SELECT id, name, email, role, createdAt FROM user ORDER BY createdAt')
+		.prepare('SELECT id, name, email, role, is_owner, createdAt FROM user ORDER BY createdAt')
 		.all<UserRow>();
+
+	const owners = results.filter((u) => u.is_owner === 1).length;
 
 	return {
 		currentUserId: locals.user!.id,
-		users: results.map((u, i) => ({
+		// The last remaining owner is undeletable/undemotable; the UI uses this to
+		// gray out the relevant controls.
+		lastOwner: owners <= 1,
+		users: results.map((u) => ({
 			id: u.id,
 			name: u.name,
 			email: u.email,
 			role: u.role,
 			provider: u.id.startsWith('cfaccess:') ? 'Cloudflare Access' : 'OIDC',
 			createdAt: u.createdAt,
-			isOwner: i === 0
+			isOwner: u.is_owner === 1
 		}))
 	};
 };
@@ -60,12 +73,46 @@ export const actions: Actions = {
 		if (userId === locals.user!.id && role !== 'admin') {
 			return fail(400, { error: 'You cannot remove your own admin role.' });
 		}
+		// An owner always retains admin capabilities; demote ownership first.
+		if (role !== 'admin' && (await isOwner(db, userId))) {
+			return fail(400, { error: 'Remove owner status before changing this role.' });
+		}
 
 		await db
 			.prepare('UPDATE user SET role = ?1, updatedAt = ?2 WHERE id = ?3')
 			.bind(role, Math.floor(Date.now() / 1000), userId)
 			.run();
 
+		return { saved: true };
+	},
+
+	setOwner: async ({ request, platform, locals }) => {
+		requireAdmin(locals);
+		const db = platform?.env.ATTIC_DB;
+		if (!db) throw error(500, 'Database binding unavailable');
+
+		const form = await request.formData();
+		const userId = String(form.get('userId') ?? '');
+		const owner = form.get('owner') === 'true';
+		const now = Math.floor(Date.now() / 1000);
+
+		if (owner) {
+			// Granting ownership implies admin.
+			await db
+				.prepare('UPDATE user SET is_owner = 1, role = ?1, updatedAt = ?2 WHERE id = ?3')
+				.bind('admin', now, userId)
+				.run();
+			return { saved: true };
+		}
+
+		// Revoking ownership: never drop below one owner.
+		if ((await isOwner(db, userId)) && (await ownerCount(db)) <= 1) {
+			return fail(400, { error: 'Add another owner before removing the last one.' });
+		}
+		await db
+			.prepare('UPDATE user SET is_owner = 0, updatedAt = ?1 WHERE id = ?2')
+			.bind(now, userId)
+			.run();
 		return { saved: true };
 	},
 
@@ -95,8 +142,8 @@ export const actions: Actions = {
 		const now = Math.floor(Date.now() / 1000);
 		await db
 			.prepare(
-				`INSERT INTO user (id, name, email, emailVerified, role, createdAt, updatedAt)
-				 VALUES (?1, ?2, ?3, 1, ?4, ?5, ?5)`
+				`INSERT INTO user (id, name, email, emailVerified, role, is_owner, createdAt, updatedAt)
+				 VALUES (?1, ?2, ?3, 1, ?4, 0, ?5, ?5)`
 			)
 			.bind(crypto.randomUUID(), email, email, role, now)
 			.run();
@@ -114,8 +161,8 @@ export const actions: Actions = {
 		if (userId === locals.user!.id) {
 			return fail(400, { error: 'You cannot delete your own account.' });
 		}
-		if (userId === (await ownerId(db))) {
-			return fail(400, { error: 'The owner account cannot be deleted.' });
+		if ((await isOwner(db, userId)) && (await ownerCount(db)) <= 1) {
+			return fail(400, { error: 'Add another owner before deleting the last one.' });
 		}
 
 		// D1 does not enforce foreign keys, so clean up dependents explicitly.
