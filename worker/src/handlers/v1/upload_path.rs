@@ -665,7 +665,13 @@ async fn handle_streaming_compressed_upload(
             }
 
             // Finish compression
-            let result = compressor.finish();
+            let result = match compressor.finish() {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = multipart.abort().await;
+                    return Ok(e.to_response());
+                }
+            };
             (
                 result.remaining_data,
                 result.file_hash,
@@ -881,11 +887,17 @@ async fn handle_buffered_upload(
         Err(e) => return Ok(e.to_response()),
     };
 
-    // Generate storage key with compression extension
+    // Generate storage key with compression extension. Strip the "sha256:"
+    // prefix so the key matches the streaming upload path's layout
+    // (nar/<hh>/<hexhash>.<ext>) rather than nar/sh/sha256:<hexhash>.<ext>.
+    let key_hash = upload_info
+        .nar_hash
+        .strip_prefix("sha256:")
+        .unwrap_or(&upload_info.nar_hash);
     let storage_key = format!(
         "nar/{}/{}{}",
-        &upload_info.nar_hash[..2],
-        upload_info.nar_hash,
+        &key_hash[..2],
+        key_hash,
         compression_result.compression.file_extension()
     );
 
@@ -1048,11 +1060,17 @@ async fn handle_buffered_upload_with_bytes(
         Err(e) => return Ok(e.to_response()),
     };
 
-    // Generate storage key with compression extension
+    // Generate storage key with compression extension. Strip the "sha256:"
+    // prefix so the key matches the streaming upload path's layout
+    // (nar/<hh>/<hexhash>.<ext>) rather than nar/sh/sha256:<hexhash>.<ext>.
+    let key_hash = upload_info
+        .nar_hash
+        .strip_prefix("sha256:")
+        .unwrap_or(&upload_info.nar_hash);
     let storage_key = format!(
         "nar/{}/{}{}",
-        &upload_info.nar_hash[..2],
-        upload_info.nar_hash,
+        &key_hash[..2],
+        key_hash,
         compression_result.compression.file_extension()
     );
 
@@ -1317,8 +1335,12 @@ pub async fn start_chunked_upload(mut req: Request, ctx: RouteContext<()>) -> Re
         .await;
     }
 
-    // Get compression config from cache
-    let compression_config = CompressionConfig::from_str(&cache.compression);
+    // The chunked protocol transports NARs that the client has already
+    // compressed with zstd (see client/src/push.rs). The worker stores those
+    // bytes verbatim, so the recorded compression must be zstd regardless of
+    // the cache's configured compression — otherwise the narinfo advertises the
+    // wrong codec and Nix fails to decompress the object.
+    let chunked_compression = CompressionType::Zstd;
 
     // Generate storage key with compression extension
     let expected_nar_hash = body
@@ -1330,7 +1352,7 @@ pub async fn start_chunked_upload(mut req: Request, ctx: RouteContext<()>) -> Re
         "nar/{}/{}{}",
         &expected_nar_hash[..2],
         expected_nar_hash,
-        compression_config.r#type.file_extension()
+        chunked_compression.file_extension()
     );
 
     // Start R2 multipart upload
@@ -1354,7 +1376,7 @@ pub async fn start_chunked_upload(mut req: Request, ctx: RouteContext<()>) -> Re
         nar_info: body.nar_info,
         cache_id,
         expected_nar_size: body.nar_size,
-        compression: compression_config.r#type.as_str().to_string(),
+        compression: chunked_compression.as_str().to_string(),
         parts_uploaded: 0,
         bytes_received: 0,
         uploaded_parts: Vec::new(),

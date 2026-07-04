@@ -227,26 +227,27 @@ impl StreamingCompressor {
     /// - Remaining compressed data (may be empty or less than target size)
     /// - SHA256 hash of all compressed data (hex-encoded)
     /// - Total size of compressed data
-    pub fn finish(mut self) -> StreamingCompressionResult {
-        // For Zstd, compress any remaining input
+    pub fn finish(mut self) -> WorkerResult<StreamingCompressionResult> {
+        // For Zstd, compress any remaining input. A failure here must be
+        // propagated: silently dropping the final block would produce a
+        // truncated, invalid archive that still passes NAR-hash validation
+        // (which hashes uncompressed bytes) and completes the upload.
         if self.compression == CompressionType::Zstd && !self.input_buffer.is_empty() {
-            if let Ok(compressed) =
-                super::js_zstd::compress(&self.input_buffer, self.level.to_zstd_level())
-            {
-                self.hasher.update(&compressed);
-                self.buffer.extend(compressed);
-            }
+            let compressed =
+                super::js_zstd::compress(&self.input_buffer, self.level.to_zstd_level())?;
+            self.hasher.update(&compressed);
+            self.buffer.extend(compressed);
         }
 
         let file_hash = hex::encode(self.hasher.finalize());
         let remaining_size = self.buffer.len() as u64;
 
-        StreamingCompressionResult {
+        Ok(StreamingCompressionResult {
             remaining_data: self.buffer,
             file_hash,
             total_size: self.total_size + remaining_size,
             compression: self.compression,
-        }
+        })
     }
 }
 
@@ -690,7 +691,7 @@ mod tests {
         let result = compressor.compress_chunk(b"hello world").unwrap();
         assert!(result.is_none()); // Should not be ready yet
 
-        let finish = compressor.finish();
+        let finish = compressor.finish().unwrap();
         assert_eq!(finish.remaining_data, b"hello world");
         assert_eq!(finish.total_size, 11);
     }
@@ -708,7 +709,7 @@ mod tests {
         // Part should be exactly target_part_size (100 bytes)
         assert_eq!(result.unwrap().len(), 100);
 
-        let finish = compressor.finish();
+        let finish = compressor.finish().unwrap();
         // Remaining 50 bytes should be in the buffer
         assert_eq!(finish.remaining_data.len(), 50);
     }
@@ -749,7 +750,7 @@ mod tests {
             }
         }
 
-        let finish = compressor.finish();
+        let finish = compressor.finish().unwrap();
         let final_bytes = finish.remaining_data.len();
 
         // Verify total bytes matches
@@ -782,7 +783,7 @@ mod tests {
         let result = compressor.compress_chunk(&data).unwrap();
         assert!(result.is_none()); // Not enough for a part yet
 
-        let finish = compressor.finish();
+        let finish = compressor.finish().unwrap();
 
         // Brotli should compress this significantly
         assert!(
@@ -806,7 +807,7 @@ mod tests {
         compressor.compress_chunk(b"hello ").unwrap();
         compressor.compress_chunk(b"world").unwrap();
 
-        let finish = compressor.finish();
+        let finish = compressor.finish().unwrap();
 
         // For uncompressed data, the file hash should match the input hash
         // SHA256 of "hello world"
@@ -872,7 +873,7 @@ mod tests {
 
         // Finalize
         let (nar_hash, nar_size) = nar_hasher.finalize();
-        let compression_result = compressor.finish();
+        let compression_result = compressor.finish().unwrap();
 
         // Add remaining data as final part
         if !compression_result.remaining_data.is_empty() {
