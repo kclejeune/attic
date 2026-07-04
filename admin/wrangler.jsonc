@@ -3,10 +3,22 @@
   "compatibility_date": "2025-09-01",
   "compatibility_flags": ["nodejs_compat"],
 
-  // SvelteKit build output (adapter-cloudflare). The adapter writes the worker
-  // entry and the static client assets; the Cloudflare Vite plugin wires these
-  // up, so `main`/`assets.directory` are managed by the build.
+  // adapter-cloudflare build output: _worker.js plus the static client assets
+  // (adapter also writes _routes.json in this directory).
+  "main": ".svelte-kit/cloudflare/_worker.js",
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".svelte-kit/cloudflare"
+  },
   "observability": { "enabled": true },
+
+  // Custom domain: Cloudflare provisions the DNS record and edge certificate
+  // for this hostname automatically on deploy.
+  "routes": [{ "pattern": "app.cache.kclj.io", "custom_domain": true }],
+
+  "vars": {
+    "APP_URL": "https://app.cache.kclj.io"
+  },
 
   // Shared D1 database with the attic API worker. The admin app owns the
   // user/api_token/session/audit_log tables; the attic worker owns cache/nar/etc.
