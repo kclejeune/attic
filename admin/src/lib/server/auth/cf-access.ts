@@ -63,18 +63,25 @@ async function upsertAccessUser(
 ): Promise<SessionUser> {
 	const db = getDb(env.ATTIC_DB);
 	const id = `cfaccess:${identity.sub}`;
+	const email = identity.email ?? `${identity.sub}@cf-access.local`;
 	const now = new Date();
 
 	// Bootstrap: the deployment's first user (and any user while no admin exists)
 	// is promoted to admin so there is always someone who can manage the rest.
 	const adminExists = await hasAdmin(env);
 
-	const existing = await db.select().from(schema.user).where(eq(schema.user.id, id)).limit(1);
+	// Match by email first so a pre-provisioned (invited) account adopts its
+	// assigned role instead of colliding on the unique email; fall back to the
+	// Access-subject id for accounts created before invites existed.
+	let existing = await db.select().from(schema.user).where(eq(schema.user.email, email)).limit(1);
+	if (existing.length === 0) {
+		existing = await db.select().from(schema.user).where(eq(schema.user.id, id)).limit(1);
+	}
 	if (existing.length > 0) {
 		const u = existing[0];
 		let role = (u.role as UserRole) ?? 'member';
 		if (role === 'member' && !adminExists) {
-			await db.update(schema.user).set({ role: 'admin' }).where(eq(schema.user.id, id));
+			await db.update(schema.user).set({ role: 'admin' }).where(eq(schema.user.id, u.id));
 			role = 'admin';
 		}
 		return {
@@ -91,7 +98,7 @@ async function upsertAccessUser(
 	await db.insert(schema.user).values({
 		id,
 		name: identity.name ?? identity.email ?? identity.sub,
-		email: identity.email ?? `${identity.sub}@cf-access.local`,
+		email,
 		emailVerified: true,
 		role,
 		createdAt: now,
