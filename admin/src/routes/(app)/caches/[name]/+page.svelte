@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { formatBytes, formatCount } from '$lib/format';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import CopyButton from '$lib/components/copy-button.svelte';
 	import CopyField from '$lib/components/copy-field.svelte';
+	import CopyBlock from '$lib/components/copy-block.svelte';
 	import { ArrowLeft, Lock, Globe, ChevronLeft, ChevronRight } from '@lucide/svelte';
 
 	let { data } = $props();
@@ -78,14 +78,7 @@
 
 		<div class="mt-4">
 			<span class="mb-1 block text-xs text-muted-foreground">nix.conf</span>
-			<div class="relative overflow-hidden rounded-md border border-input bg-muted">
-				<pre class="overflow-x-auto px-3 py-2.5 pr-12 font-mono text-xs leading-5"><code
-						>{nixConf}</code
-					></pre>
-				<div class="absolute top-1.5 right-1.5">
-					<CopyButton text={nixConf} label="Copy nix.conf snippet" />
-				</div>
-			</div>
+			<CopyBlock text={nixConf} label="Copy nix.conf snippet" />
 		</div>
 	</section>
 

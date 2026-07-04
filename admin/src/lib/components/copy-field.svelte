@@ -25,7 +25,7 @@
 	onclick={copy}
 	title={label}
 	aria-label={label}
-	class="group flex w-full items-stretch overflow-hidden rounded-md border border-input bg-muted text-left transition-colors hover:border-accent-foreground/20 {className}"
+	class="group flex w-full cursor-pointer items-stretch overflow-hidden rounded-md border border-input bg-muted text-left transition-colors hover:bg-accent/40 {className}"
 >
 	<code class="min-w-0 flex-1 truncate px-3 py-2.5 font-mono text-xs leading-5">{text}</code>
 	<span
