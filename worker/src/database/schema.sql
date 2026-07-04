@@ -87,6 +87,25 @@ CREATE TABLE IF NOT EXISTS chunkref (
 CREATE INDEX IF NOT EXISTS idx_chunkref_nar ON chunkref(nar_id, seq);
 CREATE INDEX IF NOT EXISTS idx_chunkref_chunk ON chunkref(chunk_id);
 
+-- Pending chunked-upload state (server-side; the client holds only an opaque token)
+CREATE TABLE IF NOT EXISTS pending_upload (
+    token TEXT PRIMARY KEY,
+    cache_id INTEGER NOT NULL REFERENCES cache(id),
+    cache_name TEXT NOT NULL,
+    r2_upload_id TEXT NOT NULL,
+    r2_key TEXT NOT NULL,
+    storage_key TEXT NOT NULL,
+    nar_info TEXT NOT NULL,
+    expected_nar_size INTEGER NOT NULL,
+    compression TEXT NOT NULL,
+    parts_uploaded INTEGER NOT NULL DEFAULT 0,
+    bytes_received INTEGER NOT NULL DEFAULT 0,
+    uploaded_parts TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_upload_created ON pending_upload(created_at);
+
 -- Migrations tracking table
 CREATE TABLE IF NOT EXISTS _migrations (
     id TEXT PRIMARY KEY,

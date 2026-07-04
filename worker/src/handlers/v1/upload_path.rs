@@ -9,8 +9,8 @@ use crate::compression::{
     compress_buffer, CompressionConfig, CompressionLevel, CompressionType, NarHasher,
     StatefulBrotliCompressor, StatefulGzipCompressor, StreamingCompressor,
 };
-use crate::database::{Cache, Chunk, ChunkRef, ChunkState, Nar, NarState, Object};
-use crate::error::WorkerError;
+use crate::database::{Cache, Chunk, ChunkRef, ChunkState, Nar, NarState, Object, PendingUpload};
+use crate::error::{WorkerError, WorkerResult};
 use crate::state::{RequestState, WorkerState};
 
 /// Maximum body size for buffered compression (15 MB).
@@ -1231,31 +1231,6 @@ pub struct StartChunkedUploadResponse {
     pub chunk_size: u64,
 }
 
-/// Internal state for a chunked upload (encoded in upload_token).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ChunkedUploadState {
-    /// R2 multipart upload ID.
-    r2_upload_id: String,
-    /// R2 multipart upload key.
-    r2_key: String,
-    /// Storage key for the final object.
-    storage_key: String,
-    /// NAR info for final object creation.
-    nar_info: ChunkedNarInfo,
-    /// Cache ID.
-    cache_id: i64,
-    /// Expected NAR size.
-    expected_nar_size: u64,
-    /// Compression type used.
-    compression: String,
-    /// Number of parts uploaded so far.
-    parts_uploaded: u16,
-    /// Total bytes received (compressed).
-    bytes_received: u64,
-    /// Info about uploaded parts (part number + etag), needed for multipart complete.
-    uploaded_parts: Vec<crate::storage::UploadedPartInfo>,
-}
-
 /// Request body for completing a chunked upload.
 #[derive(Debug, Deserialize)]
 pub struct CompleteChunkedUploadRequest {
@@ -1368,25 +1343,34 @@ pub async fn start_chunked_upload(mut req: Request, ctx: RouteContext<()>) -> Re
     // Get the upload ID and key from the multipart upload
     let (r2_upload_id, r2_key) = multipart.get_upload_info().await;
 
-    // Create initial upload state
-    let upload_state = ChunkedUploadState {
+    // Persist the upload state server-side and hand the client only an opaque
+    // random token. Trusted fields (cache, storage key, R2 identifiers) never
+    // leave the server, so a client cannot forge them.
+    let nar_info_json = serde_json::to_string(&body.nar_info)
+        .map_err(|e| worker::Error::RustError(format!("Failed to encode nar_info: {}", e)))?;
+
+    let upload_token = generate_upload_token()?;
+    let pending = PendingUpload {
+        token: upload_token.clone(),
+        cache_id,
+        cache_name: body.nar_info.cache.clone(),
         r2_upload_id,
         r2_key,
         storage_key,
-        nar_info: body.nar_info,
-        cache_id,
-        expected_nar_size: body.nar_size,
+        nar_info: nar_info_json,
+        expected_nar_size: body.nar_size as i64,
         compression: chunked_compression.as_str().to_string(),
         parts_uploaded: 0,
         bytes_received: 0,
-        uploaded_parts: Vec::new(),
+        uploaded_parts: "[]".to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
     };
 
-    // Encode state as base64 token
-    let state_json = serde_json::to_string(&upload_state)
-        .map_err(|e| worker::Error::RustError(format!("Failed to encode state: {}", e)))?;
-    let upload_token =
-        base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE, &state_json);
+    if let Err(e) = worker_state.database.create_pending_upload(&pending).await {
+        // Best-effort cleanup of the just-created R2 multipart upload.
+        let _ = multipart.abort().await;
+        return Ok(e.to_response());
+    }
 
     let response = StartChunkedUploadResponse {
         upload_token,
@@ -1394,6 +1378,28 @@ pub async fn start_chunked_upload(mut req: Request, ctx: RouteContext<()>) -> Re
     };
 
     Response::from_json(&response)
+}
+
+/// Generate an opaque random upload token (256 bits, hex-encoded).
+fn generate_upload_token() -> WorkerResult<String> {
+    let mut buf = [0u8; 32];
+    getrandom::getrandom(&mut buf)
+        .map_err(|e| WorkerError::Internal(format!("RNG error: {}", e)))?;
+    Ok(hex::encode(buf))
+}
+
+/// Re-check that the request's token grants push permission to the given cache.
+fn require_push_for(req_state: &RequestState, cache_name: &str) -> WorkerResult<()> {
+    let token = req_state
+        .token
+        .as_ref()
+        .ok_or_else(|| WorkerError::Authentication("No token provided".to_string()))?;
+    let cache = attic::cache::CacheName::new(cache_name.to_string())
+        .map_err(|e| WorkerError::BadRequest(format!("Invalid cache name: {}", e)))?;
+    token
+        .get_permission_for_cache(&cache)
+        .require_push()
+        .map_err(|e| WorkerError::Authorization(format!("Permission denied: {:?}", e)))
 }
 
 /// PUT /_api/v1/upload-path/chunk
@@ -1412,11 +1418,6 @@ pub async fn upload_chunk(mut req: Request, ctx: RouteContext<()>) -> Result<Res
         Ok(s) => s,
         Err(e) => return Ok(e.to_response()),
     };
-
-    // Check authentication
-    if req_state.token.is_none() {
-        return Ok(WorkerError::Authentication("No token provided".to_string()).to_response());
-    }
 
     // Get upload token from header
     let upload_token = match req.headers().get("X-Upload-Token").ok().flatten() {
@@ -1445,37 +1446,26 @@ pub async fn upload_chunk(mut req: Request, ctx: RouteContext<()>) -> Result<Res
         }
     };
 
-    // Decode upload state
-    let state_json =
-        match base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE, &upload_token) {
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(s) => s,
-                Err(e) => {
-                    return Ok(
-                        WorkerError::BadRequest(format!("Invalid upload token: {}", e))
-                            .to_response(),
-                    )
-                }
-            },
-            Err(e) => {
-                return Ok(
-                    WorkerError::BadRequest(format!("Invalid upload token encoding: {}", e))
-                        .to_response(),
-                )
-            }
-        };
-
-    let mut upload_state: ChunkedUploadState = match serde_json::from_str(&state_json) {
-        Ok(s) => s,
-        Err(e) => {
-            return Ok(
-                WorkerError::BadRequest(format!("Invalid upload token data: {}", e)).to_response(),
-            )
+    // Look up the server-side upload state.
+    let mut upload_state = match worker_state
+        .database
+        .get_pending_upload(&upload_token)
+        .await
+    {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return Ok(WorkerError::NotFound("Unknown upload token".to_string()).to_response())
         }
+        Err(e) => return Ok(e.to_response()),
     };
 
+    // Require push permission for the cache bound to this upload.
+    if let Err(e) = require_push_for(&req_state, &upload_state.cache_name) {
+        return Ok(e.to_response());
+    }
+
     // Validate part number is sequential
-    let expected_part = upload_state.parts_uploaded + 1;
+    let expected_part = (upload_state.parts_uploaded + 1) as u16;
     if part_number != expected_part {
         return Ok(WorkerError::BadRequest(format!(
             "Expected part {}, got {}",
@@ -1496,13 +1486,18 @@ pub async fn upload_chunk(mut req: Request, ctx: RouteContext<()>) -> Result<Res
         return Ok(WorkerError::BadRequest("Empty chunk data".to_string()).to_response());
     }
 
+    // Decode the parts accumulated so far.
+    let mut uploaded_parts: Vec<crate::storage::UploadedPartInfo> =
+        serde_json::from_str(&upload_state.uploaded_parts)
+            .map_err(|e| worker::Error::RustError(format!("Corrupt upload state: {}", e)))?;
+
     // Resume the multipart upload and upload part
     let mut multipart = worker_state
         .storage
         .resume_multipart_upload(
             &upload_state.r2_key,
             &upload_state.r2_upload_id,
-            upload_state.parts_uploaded,
+            upload_state.parts_uploaded as u16,
         )
         .await?;
 
@@ -1511,17 +1506,27 @@ pub async fn upload_chunk(mut req: Request, ctx: RouteContext<()>) -> Result<Res
         Err(e) => return Ok(e.to_response()),
     };
 
-    // Update state with part info
-    upload_state.parts_uploaded = part_number;
-    upload_state.bytes_received += chunk_data.len() as u64;
-    upload_state.uploaded_parts.push(part_info);
+    // Update state with part info and persist it.
+    uploaded_parts.push(part_info);
+    upload_state.parts_uploaded = part_number as i32;
+    upload_state.bytes_received += chunk_data.len() as i64;
+    let uploaded_parts_json = serde_json::to_string(&uploaded_parts)
+        .map_err(|e| worker::Error::RustError(format!("Failed to encode parts: {}", e)))?;
 
-    // Encode updated state
-    let state_json = serde_json::to_string(&upload_state)
-        .map_err(|e| worker::Error::RustError(format!("Failed to encode state: {}", e)))?;
-    let new_token = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE, &state_json);
+    if let Err(e) = worker_state
+        .database
+        .update_pending_upload(
+            &upload_token,
+            upload_state.parts_uploaded,
+            upload_state.bytes_received,
+            &uploaded_parts_json,
+        )
+        .await
+    {
+        return Ok(e.to_response());
+    }
 
-    // Return updated token
+    // Return the same opaque token; part accounting lives server-side.
     #[derive(Serialize)]
     struct ChunkUploadResponse {
         upload_token: String,
@@ -1530,9 +1535,9 @@ pub async fn upload_chunk(mut req: Request, ctx: RouteContext<()>) -> Result<Res
     }
 
     Response::from_json(&ChunkUploadResponse {
-        upload_token: new_token,
-        parts_uploaded: upload_state.parts_uploaded,
-        bytes_received: upload_state.bytes_received,
+        upload_token,
+        parts_uploaded: upload_state.parts_uploaded as u16,
+        bytes_received: upload_state.bytes_received as u64,
     })
 }
 
@@ -1550,11 +1555,6 @@ pub async fn complete_chunked_upload(mut req: Request, ctx: RouteContext<()>) ->
         Err(e) => return Ok(e.to_response()),
     };
 
-    // Check authentication
-    if req_state.token.is_none() {
-        return Ok(WorkerError::Authentication("No token provided".to_string()).to_response());
-    }
-
     // Parse request body
     let body: CompleteChunkedUploadRequest = match req.json().await {
         Ok(b) => b,
@@ -1565,38 +1565,33 @@ pub async fn complete_chunked_upload(mut req: Request, ctx: RouteContext<()>) ->
         }
     };
 
-    // Decode upload state
-    let state_json = match base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE,
-        &body.upload_token,
-    ) {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(s) => s,
-            Err(e) => {
-                return Ok(
-                    WorkerError::BadRequest(format!("Invalid upload token: {}", e)).to_response(),
-                )
-            }
-        },
-        Err(e) => {
-            return Ok(
-                WorkerError::BadRequest(format!("Invalid upload token encoding: {}", e))
-                    .to_response(),
-            )
+    // Look up the server-side upload state.
+    let upload_state = match worker_state
+        .database
+        .get_pending_upload(&body.upload_token)
+        .await
+    {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return Ok(WorkerError::NotFound("Unknown upload token".to_string()).to_response())
         }
+        Err(e) => return Ok(e.to_response()),
     };
 
-    let upload_state: ChunkedUploadState = match serde_json::from_str(&state_json) {
-        Ok(s) => s,
-        Err(e) => {
-            return Ok(
-                WorkerError::BadRequest(format!("Invalid upload token data: {}", e)).to_response(),
-            )
-        }
-    };
+    // Require push permission for the cache bound to this upload.
+    if let Err(e) = require_push_for(&req_state, &upload_state.cache_name) {
+        return Ok(e.to_response());
+    }
+
+    // Decode the NAR info and accumulated parts.
+    let nar_info: ChunkedNarInfo = serde_json::from_str(&upload_state.nar_info)
+        .map_err(|e| worker::Error::RustError(format!("Corrupt upload state: {}", e)))?;
+    let uploaded_parts: Vec<crate::storage::UploadedPartInfo> =
+        serde_json::from_str(&upload_state.uploaded_parts)
+            .map_err(|e| worker::Error::RustError(format!("Corrupt upload state: {}", e)))?;
 
     // Validate we received data
-    if upload_state.parts_uploaded == 0 || upload_state.uploaded_parts.is_empty() {
+    if upload_state.parts_uploaded == 0 || uploaded_parts.is_empty() {
         return Ok(WorkerError::BadRequest("No parts uploaded".to_string()).to_response());
     }
 
@@ -1606,14 +1601,11 @@ pub async fn complete_chunked_upload(mut req: Request, ctx: RouteContext<()>) ->
         .resume_multipart_upload(
             &upload_state.r2_key,
             &upload_state.r2_upload_id,
-            upload_state.parts_uploaded,
+            upload_state.parts_uploaded as u16,
         )
         .await?;
 
-    let remote_file = match multipart
-        .complete_with_parts(upload_state.uploaded_parts.clone())
-        .await
-    {
+    let remote_file = match multipart.complete_with_parts(uploaded_parts).await {
         Ok(rf) => rf,
         Err(e) => return Ok(e.to_response()),
     };
@@ -1643,8 +1635,8 @@ pub async fn complete_chunked_upload(mut req: Request, ctx: RouteContext<()>) ->
     let nar = Nar {
         id: None,
         state: NarState::PendingUpload,
-        nar_hash: upload_state.nar_info.nar_hash.clone(),
-        nar_size: upload_state.expected_nar_size as i64,
+        nar_hash: nar_info.nar_hash.clone(),
+        nar_size: upload_state.expected_nar_size,
         compression: upload_state.compression.clone(),
         num_chunks: 1,
         completeness_hint: false,
@@ -1667,8 +1659,8 @@ pub async fn complete_chunked_upload(mut req: Request, ctx: RouteContext<()>) ->
     let chunk = Chunk {
         id: None,
         state: ChunkState::Valid,
-        chunk_hash: upload_state.nar_info.nar_hash.clone(),
-        chunk_size: upload_state.expected_nar_size as i64,
+        chunk_hash: nar_info.nar_hash.clone(),
+        chunk_size: upload_state.expected_nar_size,
         file_hash: Some(file_hash),
         file_size: Some(file_size as i64),
         compression: upload_state.compression.clone(),
@@ -1700,7 +1692,7 @@ pub async fn complete_chunked_upload(mut req: Request, ctx: RouteContext<()>) ->
         nar_id,
         seq: 0,
         chunk_id: Some(chunk_id),
-        chunk_hash: upload_state.nar_info.nar_hash.clone(),
+        chunk_hash: nar_info.nar_hash.clone(),
         compression: upload_state.compression.clone(),
     };
 
@@ -1730,13 +1722,13 @@ pub async fn complete_chunked_upload(mut req: Request, ctx: RouteContext<()>) ->
         id: None,
         cache_id: upload_state.cache_id,
         nar_id,
-        store_path_hash: upload_state.nar_info.store_path_hash.clone(),
-        store_path: upload_state.nar_info.store_path.clone(),
-        references: upload_state.nar_info.references.clone(),
-        system: upload_state.nar_info.system.clone(),
-        deriver: upload_state.nar_info.deriver.clone(),
-        sigs: upload_state.nar_info.sigs.clone(),
-        ca: upload_state.nar_info.ca.clone(),
+        store_path_hash: nar_info.store_path_hash.clone(),
+        store_path: nar_info.store_path.clone(),
+        references: nar_info.references.clone(),
+        system: nar_info.system.clone(),
+        deriver: nar_info.deriver.clone(),
+        sigs: nar_info.sigs.clone(),
+        ca: nar_info.ca.clone(),
         created_at: chrono::Utc::now().to_rfc3339(),
         last_accessed_at: None,
         created_by: None,
@@ -1745,6 +1737,12 @@ pub async fn complete_chunked_upload(mut req: Request, ctx: RouteContext<()>) ->
     if let Err(e) = worker_state.database.create_object(&object).await {
         return Ok(e.to_response());
     }
+
+    // Upload is complete; drop the server-side pending state.
+    let _ = worker_state
+        .database
+        .delete_pending_upload(&body.upload_token)
+        .await;
 
     let result = UploadPathResult {
         kind: "uploaded".to_string(),

@@ -574,6 +574,131 @@ impl D1Backend {
         let rows_affected = meta.and_then(|m| m.changes).unwrap_or(0) as u64;
         Ok(rows_affected > 0)
     }
+
+    /// Insert a new pending chunked-upload row.
+    pub async fn create_pending_upload(&self, upload: &PendingUpload) -> WorkerResult<()> {
+        let stmt = self
+            .db
+            .prepare(
+                "INSERT INTO pending_upload (token, cache_id, cache_name, r2_upload_id, r2_key, \
+                 storage_key, nar_info, expected_nar_size, compression, parts_uploaded, \
+                 bytes_received, uploaded_parts, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            )
+            .bind(&[
+                upload.token.clone().into(),
+                (upload.cache_id as f64).into(),
+                upload.cache_name.clone().into(),
+                upload.r2_upload_id.clone().into(),
+                upload.r2_key.clone().into(),
+                upload.storage_key.clone().into(),
+                upload.nar_info.clone().into(),
+                (upload.expected_nar_size as f64).into(),
+                upload.compression.clone().into(),
+                upload.parts_uploaded.into(),
+                (upload.bytes_received as f64).into(),
+                upload.uploaded_parts.clone().into(),
+                upload.created_at.clone().into(),
+            ])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
+
+        stmt.run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Fetch a pending chunked-upload row by token.
+    pub async fn get_pending_upload(&self, token: &str) -> WorkerResult<Option<PendingUpload>> {
+        let stmt = self
+            .db
+            .prepare(
+                "SELECT token, cache_id, cache_name, r2_upload_id, r2_key, storage_key, \
+                 nar_info, expected_nar_size, compression, parts_uploaded, bytes_received, \
+                 uploaded_parts, created_at FROM pending_upload WHERE token = ?1",
+            )
+            .bind(&[token.into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
+
+        let result = stmt
+            .first::<PendingUploadRow>(None)
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        Ok(result.map(|row| row.into()))
+    }
+
+    /// Update part accounting for a pending chunked-upload row.
+    pub async fn update_pending_upload(
+        &self,
+        token: &str,
+        parts_uploaded: i32,
+        bytes_received: i64,
+        uploaded_parts: &str,
+    ) -> WorkerResult<()> {
+        let stmt = self
+            .db
+            .prepare(
+                "UPDATE pending_upload SET parts_uploaded = ?1, bytes_received = ?2, \
+                 uploaded_parts = ?3 WHERE token = ?4",
+            )
+            .bind(&[
+                parts_uploaded.into(),
+                (bytes_received as f64).into(),
+                uploaded_parts.into(),
+                token.into(),
+            ])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
+
+        stmt.run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Delete a pending chunked-upload row by token.
+    pub async fn delete_pending_upload(&self, token: &str) -> WorkerResult<()> {
+        let stmt = self
+            .db
+            .prepare("DELETE FROM pending_upload WHERE token = ?1")
+            .bind(&[token.into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
+
+        stmt.run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// List pending uploads created before the given RFC3339 timestamp (for GC).
+    pub async fn list_stale_pending_uploads(
+        &self,
+        before: &str,
+    ) -> WorkerResult<Vec<PendingUpload>> {
+        let stmt = self
+            .db
+            .prepare(
+                "SELECT token, cache_id, cache_name, r2_upload_id, r2_key, storage_key, \
+                 nar_info, expected_nar_size, compression, parts_uploaded, bytes_received, \
+                 uploaded_parts, created_at FROM pending_upload WHERE created_at < ?1",
+            )
+            .bind(&[before.into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?;
+
+        let result = stmt
+            .all()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        let rows = result
+            .results::<PendingUploadRow>()
+            .map_err(|e| WorkerError::Database(format!("Deserialize error: {}", e)))?;
+
+        Ok(rows.into_iter().map(|row| row.into()).collect())
+    }
 }
 
 // Row types for D1 deserialization
@@ -737,4 +862,41 @@ impl From<ObjectWithNarRow> for ObjectWithNar {
 #[derive(serde::Deserialize)]
 struct PathHashRow {
     store_path_hash: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PendingUploadRow {
+    token: String,
+    cache_id: i64,
+    cache_name: String,
+    r2_upload_id: String,
+    r2_key: String,
+    storage_key: String,
+    nar_info: String,
+    expected_nar_size: i64,
+    compression: String,
+    parts_uploaded: i32,
+    bytes_received: i64,
+    uploaded_parts: String,
+    created_at: String,
+}
+
+impl From<PendingUploadRow> for PendingUpload {
+    fn from(row: PendingUploadRow) -> Self {
+        PendingUpload {
+            token: row.token,
+            cache_id: row.cache_id,
+            cache_name: row.cache_name,
+            r2_upload_id: row.r2_upload_id,
+            r2_key: row.r2_key,
+            storage_key: row.storage_key,
+            nar_info: row.nar_info,
+            expected_nar_size: row.expected_nar_size,
+            compression: row.compression,
+            parts_uploaded: row.parts_uploaded,
+            bytes_received: row.bytes_received,
+            uploaded_parts: row.uploaded_parts,
+            created_at: row.created_at,
+        }
+    }
 }

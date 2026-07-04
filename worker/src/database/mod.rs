@@ -204,4 +204,61 @@ impl Database {
             Database::Turso(backend) => backend.delete_cache(name).await,
         }
     }
+
+    /// Insert a new pending chunked-upload row.
+    pub async fn create_pending_upload(&self, upload: &PendingUpload) -> WorkerResult<()> {
+        match self {
+            Database::D1(backend) => backend.create_pending_upload(upload).await,
+            Database::Turso(backend) => backend.create_pending_upload(upload).await,
+        }
+    }
+
+    /// Fetch a pending chunked-upload row by token.
+    pub async fn get_pending_upload(&self, token: &str) -> WorkerResult<Option<PendingUpload>> {
+        match self {
+            Database::D1(backend) => backend.get_pending_upload(token).await,
+            Database::Turso(backend) => backend.get_pending_upload(token).await,
+        }
+    }
+
+    /// Update part accounting for a pending chunked-upload row.
+    pub async fn update_pending_upload(
+        &self,
+        token: &str,
+        parts_uploaded: i32,
+        bytes_received: i64,
+        uploaded_parts: &str,
+    ) -> WorkerResult<()> {
+        match self {
+            Database::D1(backend) => {
+                backend
+                    .update_pending_upload(token, parts_uploaded, bytes_received, uploaded_parts)
+                    .await
+            }
+            Database::Turso(backend) => {
+                backend
+                    .update_pending_upload(token, parts_uploaded, bytes_received, uploaded_parts)
+                    .await
+            }
+        }
+    }
+
+    /// Delete a pending chunked-upload row by token.
+    pub async fn delete_pending_upload(&self, token: &str) -> WorkerResult<()> {
+        match self {
+            Database::D1(backend) => backend.delete_pending_upload(token).await,
+            Database::Turso(backend) => backend.delete_pending_upload(token).await,
+        }
+    }
+
+    /// List pending uploads created before the given RFC3339 timestamp (for GC).
+    pub async fn list_stale_pending_uploads(
+        &self,
+        before: &str,
+    ) -> WorkerResult<Vec<PendingUpload>> {
+        match self {
+            Database::D1(backend) => backend.list_stale_pending_uploads(before).await,
+            Database::Turso(backend) => backend.list_stale_pending_uploads(before).await,
+        }
+    }
 }

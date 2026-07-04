@@ -563,6 +563,144 @@ impl TursoBackend {
 
         Ok(result.rows_affected.unwrap_or(0) > 0)
     }
+
+    /// Insert a new pending chunked-upload row.
+    pub async fn create_pending_upload(&self, upload: &PendingUpload) -> WorkerResult<()> {
+        self.execute(
+            "INSERT INTO pending_upload (token, cache_id, cache_name, r2_upload_id, r2_key, \
+             storage_key, nar_info, expected_nar_size, compression, parts_uploaded, \
+             bytes_received, uploaded_parts, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            vec![
+                serde_json::Value::String(upload.token.clone()),
+                serde_json::Value::Number(upload.cache_id.into()),
+                serde_json::Value::String(upload.cache_name.clone()),
+                serde_json::Value::String(upload.r2_upload_id.clone()),
+                serde_json::Value::String(upload.r2_key.clone()),
+                serde_json::Value::String(upload.storage_key.clone()),
+                serde_json::Value::String(upload.nar_info.clone()),
+                serde_json::Value::Number(upload.expected_nar_size.into()),
+                serde_json::Value::String(upload.compression.clone()),
+                serde_json::Value::Number(upload.parts_uploaded.into()),
+                serde_json::Value::Number(upload.bytes_received.into()),
+                serde_json::Value::String(upload.uploaded_parts.clone()),
+                serde_json::Value::String(upload.created_at.clone()),
+            ],
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Fetch a pending chunked-upload row by token.
+    pub async fn get_pending_upload(&self, token: &str) -> WorkerResult<Option<PendingUpload>> {
+        let result = self
+            .execute(
+                "SELECT token, cache_id, cache_name, r2_upload_id, r2_key, storage_key, \
+                 nar_info, expected_nar_size, compression, parts_uploaded, bytes_received, \
+                 uploaded_parts, created_at FROM pending_upload WHERE token = ?",
+                vec![serde_json::Value::String(token.to_string())],
+            )
+            .await?;
+
+        if let Some(rows) = result.rows {
+            if let Some(row) = rows.into_iter().next() {
+                return Ok(Some(parse_pending_upload_row(&row)?));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Update part accounting for a pending chunked-upload row.
+    pub async fn update_pending_upload(
+        &self,
+        token: &str,
+        parts_uploaded: i32,
+        bytes_received: i64,
+        uploaded_parts: &str,
+    ) -> WorkerResult<()> {
+        self.execute(
+            "UPDATE pending_upload SET parts_uploaded = ?, bytes_received = ?, \
+             uploaded_parts = ? WHERE token = ?",
+            vec![
+                serde_json::Value::Number(parts_uploaded.into()),
+                serde_json::Value::Number(bytes_received.into()),
+                serde_json::Value::String(uploaded_parts.to_string()),
+                serde_json::Value::String(token.to_string()),
+            ],
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Delete a pending chunked-upload row by token.
+    pub async fn delete_pending_upload(&self, token: &str) -> WorkerResult<()> {
+        self.execute(
+            "DELETE FROM pending_upload WHERE token = ?",
+            vec![serde_json::Value::String(token.to_string())],
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// List pending uploads created before the given RFC3339 timestamp (for GC).
+    pub async fn list_stale_pending_uploads(
+        &self,
+        before: &str,
+    ) -> WorkerResult<Vec<PendingUpload>> {
+        let result = self
+            .execute(
+                "SELECT token, cache_id, cache_name, r2_upload_id, r2_key, storage_key, \
+                 nar_info, expected_nar_size, compression, parts_uploaded, bytes_received, \
+                 uploaded_parts, created_at FROM pending_upload WHERE created_at < ?",
+                vec![serde_json::Value::String(before.to_string())],
+            )
+            .await?;
+
+        let mut uploads = Vec::new();
+        if let Some(rows) = result.rows {
+            for row in rows {
+                uploads.push(parse_pending_upload_row(&row)?);
+            }
+        }
+
+        Ok(uploads)
+    }
+}
+
+/// Parse a pending upload row from query results.
+fn parse_pending_upload_row(row: &[serde_json::Value]) -> WorkerResult<PendingUpload> {
+    let s = |i: usize| {
+        row.get(i)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    Ok(PendingUpload {
+        token: s(0),
+        cache_id: row.get(1).and_then(|v| v.as_i64()).unwrap_or_default(),
+        cache_name: s(2),
+        r2_upload_id: s(3),
+        r2_key: s(4),
+        storage_key: s(5),
+        nar_info: s(6),
+        expected_nar_size: row.get(7).and_then(|v| v.as_i64()).unwrap_or_default(),
+        compression: s(8),
+        parts_uploaded: row.get(9).and_then(|v| v.as_i64()).unwrap_or_default() as i32,
+        bytes_received: row.get(10).and_then(|v| v.as_i64()).unwrap_or_default(),
+        uploaded_parts: {
+            let v = s(11);
+            if v.is_empty() {
+                "[]".to_string()
+            } else {
+                v
+            }
+        },
+        created_at: s(12),
+    })
 }
 
 /// Parse a cache row from query results.

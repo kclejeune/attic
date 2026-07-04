@@ -163,3 +163,39 @@ pub struct ObjectWithNar {
     pub object: Object,
     pub nar: Nar,
 }
+
+/// Server-side state for an in-progress chunked upload.
+///
+/// The client holds only the opaque `token`; all trusted fields (target cache,
+/// R2 multipart identifiers, part accounting) live here so a client cannot forge
+/// them by editing the token. Rows are deleted on completion and reaped by GC if
+/// abandoned.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingUpload {
+    /// Opaque random token identifying this upload.
+    pub token: String,
+    /// Target cache id.
+    pub cache_id: i64,
+    /// Target cache name (used to re-check push permission on each request).
+    pub cache_name: String,
+    /// R2 multipart upload id.
+    pub r2_upload_id: String,
+    /// R2 multipart upload key.
+    pub r2_key: String,
+    /// Final storage key for the object.
+    pub storage_key: String,
+    /// JSON-encoded ChunkedNarInfo for final object creation.
+    pub nar_info: String,
+    /// Expected uncompressed NAR size.
+    pub expected_nar_size: i64,
+    /// Compression codec of the stored bytes.
+    pub compression: String,
+    /// Number of parts uploaded so far.
+    pub parts_uploaded: i32,
+    /// Total compressed bytes received.
+    pub bytes_received: i64,
+    /// JSON-encoded Vec<UploadedPartInfo> for multipart completion.
+    pub uploaded_parts: String,
+    /// RFC3339 creation timestamp.
+    pub created_at: String,
+}
