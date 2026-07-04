@@ -269,4 +269,44 @@ impl Database {
             Database::Turso(backend) => backend.is_token_revoked(jti).await,
         }
     }
+
+    /// Retention GC: delete aged-out objects in caches with a retention period.
+    pub async fn delete_expired_objects(&self) -> WorkerResult<u64> {
+        match self {
+            Database::D1(backend) => backend.delete_expired_objects().await,
+            Database::Turso(backend) => backend.delete_expired_objects().await,
+        }
+    }
+
+    /// Reap NARs no longer referenced by any object (and their chunk refs).
+    pub async fn reap_orphan_nars(&self) -> WorkerResult<u64> {
+        match self {
+            Database::D1(backend) => backend.reap_orphan_nars().await,
+            Database::Turso(backend) => backend.reap_orphan_nars().await,
+        }
+    }
+
+    /// Chunks no longer referenced by any chunkref.
+    pub async fn find_orphan_chunks(&self) -> WorkerResult<Vec<OrphanChunk>> {
+        match self {
+            Database::D1(backend) => backend.find_orphan_chunks().await,
+            Database::Turso(backend) => backend.find_orphan_chunks().await,
+        }
+    }
+
+    /// Delete a chunk row by id.
+    pub async fn delete_chunk(&self, id: i64) -> WorkerResult<()> {
+        match self {
+            Database::D1(backend) => backend.delete_chunk(id).await,
+            Database::Turso(backend) => backend.delete_chunk(id).await,
+        }
+    }
+
+    /// Record an object access time, for LRU-based retention.
+    pub async fn touch_object(&self, cache_name: &str, store_path_hash: &str) -> WorkerResult<()> {
+        match self {
+            Database::D1(backend) => backend.touch_object(cache_name, store_path_hash).await,
+            Database::Turso(backend) => backend.touch_object(cache_name, store_path_hash).await,
+        }
+    }
 }

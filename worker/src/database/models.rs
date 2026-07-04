@@ -164,6 +164,14 @@ pub struct ObjectWithNar {
     pub nar: Nar,
 }
 
+/// A chunk no longer referenced by any NAR, to be reclaimed by GC.
+#[derive(Debug, Clone)]
+pub struct OrphanChunk {
+    pub id: i64,
+    /// JSON-encoded RemoteFile locating the bytes in R2.
+    pub remote_file: String,
+}
+
 /// Server-side state for an in-progress chunked upload.
 ///
 /// The client holds only the opaque `token`; all trusted fields (target cache,

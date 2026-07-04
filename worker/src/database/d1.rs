@@ -673,6 +673,115 @@ impl D1Backend {
         Ok(())
     }
 
+    /// Delete objects whose cache has a retention period and which have aged out
+    /// (by last access, falling back to creation time). Returns rows deleted.
+    pub async fn delete_expired_objects(&self) -> WorkerResult<u64> {
+        let result = self
+            .db
+            .prepare(
+                "DELETE FROM object WHERE id IN (\
+                 SELECT o.id FROM object o JOIN cache c ON c.id = o.cache_id \
+                 WHERE c.retention_period IS NOT NULL AND c.deleted_at IS NULL \
+                 AND datetime(COALESCE(o.last_accessed_at, o.created_at)) < \
+                     datetime('now', '-' || c.retention_period || ' days'))",
+            )
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        let meta = result
+            .meta()
+            .map_err(|e| WorkerError::Database(format!("Meta error: {}", e)))?;
+        Ok(meta.and_then(|m| m.changes).unwrap_or(0) as u64)
+    }
+
+    /// Reap NARs (and their chunk references) no longer referenced by any object,
+    /// past a one-hour grace period so in-flight uploads are left alone.
+    pub async fn reap_orphan_nars(&self) -> WorkerResult<u64> {
+        self.db
+            .prepare(
+                "DELETE FROM chunkref WHERE nar_id IN (\
+                 SELECT n.id FROM nar n \
+                 WHERE NOT EXISTS (SELECT 1 FROM object o WHERE o.nar_id = n.id) \
+                 AND datetime(n.created_at) < datetime('now', '-1 hours'))",
+            )
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        let result = self
+            .db
+            .prepare(
+                "DELETE FROM nar WHERE \
+                 NOT EXISTS (SELECT 1 FROM object o WHERE o.nar_id = nar.id) \
+                 AND datetime(created_at) < datetime('now', '-1 hours')",
+            )
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        let meta = result
+            .meta()
+            .map_err(|e| WorkerError::Database(format!("Meta error: {}", e)))?;
+        Ok(meta.and_then(|m| m.changes).unwrap_or(0) as u64)
+    }
+
+    /// Chunks no longer referenced by any chunkref (their R2 bytes can be freed).
+    pub async fn find_orphan_chunks(&self) -> WorkerResult<Vec<OrphanChunk>> {
+        let result = self
+            .db
+            .prepare(
+                "SELECT id, remote_file FROM chunk \
+                 WHERE NOT EXISTS (SELECT 1 FROM chunkref cr WHERE cr.chunk_id = chunk.id)",
+            )
+            .all()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+
+        let rows = result
+            .results::<OrphanChunkRow>()
+            .map_err(|e| WorkerError::Database(format!("Deserialize error: {}", e)))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| OrphanChunk {
+                id: r.id,
+                remote_file: r.remote_file,
+            })
+            .collect())
+    }
+
+    /// Delete a chunk row by id.
+    pub async fn delete_chunk(&self, id: i64) -> WorkerResult<()> {
+        self.db
+            .prepare("DELETE FROM chunk WHERE id = ?1")
+            .bind(&[(id as f64).into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+        Ok(())
+    }
+
+    /// Record an access time for an object, for LRU-based retention.
+    pub async fn touch_object(&self, cache_name: &str, store_path_hash: &str) -> WorkerResult<()> {
+        self.db
+            .prepare(
+                "UPDATE object SET last_accessed_at = ?1 \
+                 WHERE store_path_hash = ?2 \
+                 AND cache_id = (SELECT id FROM cache WHERE name = ?3)",
+            )
+            .bind(&[
+                chrono::Utc::now().to_rfc3339().into(),
+                store_path_hash.into(),
+                cache_name.into(),
+            ])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+        Ok(())
+    }
+
     /// Whether an admin-issued token (by `jti`) has been revoked.
     ///
     /// Returns false when no matching row exists (the token is not admin-tracked,
@@ -886,6 +995,12 @@ struct PathHashRow {
 #[derive(serde::Deserialize)]
 struct RevokedRow {
     revoked_at: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+struct OrphanChunkRow {
+    id: i64,
+    remote_file: String,
 }
 
 #[derive(serde::Deserialize)]

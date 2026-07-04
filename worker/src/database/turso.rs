@@ -644,6 +644,94 @@ impl TursoBackend {
         Ok(())
     }
 
+    /// Retention GC: delete aged-out objects in caches with a retention period.
+    pub async fn delete_expired_objects(&self) -> WorkerResult<u64> {
+        let result = self
+            .execute(
+                "DELETE FROM object WHERE id IN (\
+                 SELECT o.id FROM object o JOIN cache c ON c.id = o.cache_id \
+                 WHERE c.retention_period IS NOT NULL AND c.deleted_at IS NULL \
+                 AND datetime(COALESCE(o.last_accessed_at, o.created_at)) < \
+                     datetime('now', '-' || c.retention_period || ' days'))",
+                vec![],
+            )
+            .await?;
+        Ok(result.rows_affected.unwrap_or(0))
+    }
+
+    /// Reap NARs no longer referenced by any object (and their chunk refs).
+    pub async fn reap_orphan_nars(&self) -> WorkerResult<u64> {
+        self.execute(
+            "DELETE FROM chunkref WHERE nar_id IN (\
+             SELECT n.id FROM nar n \
+             WHERE NOT EXISTS (SELECT 1 FROM object o WHERE o.nar_id = n.id) \
+             AND datetime(n.created_at) < datetime('now', '-1 hours'))",
+            vec![],
+        )
+        .await?;
+
+        let result = self
+            .execute(
+                "DELETE FROM nar WHERE \
+                 NOT EXISTS (SELECT 1 FROM object o WHERE o.nar_id = nar.id) \
+                 AND datetime(created_at) < datetime('now', '-1 hours')",
+                vec![],
+            )
+            .await?;
+        Ok(result.rows_affected.unwrap_or(0))
+    }
+
+    /// Chunks no longer referenced by any chunkref.
+    pub async fn find_orphan_chunks(&self) -> WorkerResult<Vec<OrphanChunk>> {
+        let result = self
+            .execute(
+                "SELECT id, remote_file FROM chunk \
+                 WHERE NOT EXISTS (SELECT 1 FROM chunkref cr WHERE cr.chunk_id = chunk.id)",
+                vec![],
+            )
+            .await?;
+
+        let mut chunks = Vec::new();
+        if let Some(rows) = result.rows {
+            for row in rows {
+                chunks.push(OrphanChunk {
+                    id: row.first().and_then(|v| v.as_i64()).unwrap_or_default(),
+                    remote_file: row
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("{}")
+                        .to_string(),
+                });
+            }
+        }
+        Ok(chunks)
+    }
+
+    /// Delete a chunk row by id.
+    pub async fn delete_chunk(&self, id: i64) -> WorkerResult<()> {
+        self.execute(
+            "DELETE FROM chunk WHERE id = ?",
+            vec![serde_json::Value::Number(id.into())],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Record an object access time, for LRU-based retention.
+    pub async fn touch_object(&self, cache_name: &str, store_path_hash: &str) -> WorkerResult<()> {
+        self.execute(
+            "UPDATE object SET last_accessed_at = ? \
+             WHERE store_path_hash = ? AND cache_id = (SELECT id FROM cache WHERE name = ?)",
+            vec![
+                serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+                serde_json::Value::String(store_path_hash.to_string()),
+                serde_json::Value::String(cache_name.to_string()),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Whether an admin-issued token (by `jti`) has been revoked.
     pub async fn is_token_revoked(&self, jti: &str) -> WorkerResult<bool> {
         let result = self

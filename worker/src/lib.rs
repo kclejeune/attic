@@ -92,6 +92,8 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "/_api/v1/upload-path/complete",
             v1::upload_path::complete_chunked_upload,
         )
+        // Admin-triggered garbage collection
+        .post_async("/_api/v1/gc", v1::gc::run_gc)
         .run(req, env)
         .await
 }

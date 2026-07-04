@@ -156,6 +156,12 @@ pub async fn get_store_path_info(req: Request, ctx: RouteContext<()>) -> Result<
         Err(e) => return Ok(e.to_response()),
     };
 
+    // Record the access for LRU-based retention (best-effort).
+    let _ = state
+        .database
+        .touch_object(&cache_name, store_path_hash)
+        .await;
+
     // Get chunk info for FileHash/FileSize (first chunk for single-chunk NARs)
     let nar_id = obj
         .nar
