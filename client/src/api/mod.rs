@@ -20,18 +20,12 @@ use crate::version::ATTIC_DISTRIBUTOR;
 use attic::api::v1::cache_config::{CacheConfig, CreateCacheRequest};
 use attic::api::v1::get_missing_paths::{GetMissingPathsRequest, GetMissingPathsResponse};
 use attic::api::v1::upload_path::{
-    ATTIC_NAR_INFO, ATTIC_NAR_INFO_PREAMBLE_SIZE, UploadPathNarInfo, UploadPathResult,
-    ATTIC_NAR_INFO, ATTIC_NAR_INFO_PREAMBLE_SIZE,
-    StartChunkedUploadResponse, StartChunkedUploadResult, UploadPathNarInfo, UploadPathResult,
-    ChunkUploadResponse, ChunkedNarInfo, CompleteChunkedUploadRequest, StartChunkedUploadRequest,
+    ATTIC_NAR_INFO, ATTIC_NAR_INFO_PREAMBLE_SIZE, ChunkUploadResponse, ChunkedNarInfo,
+    CompleteChunkedUploadRequest, StartChunkedUploadRequest, StartChunkedUploadResponse,
+    StartChunkedUploadResult, UploadPathNarInfo, UploadPathResult,
 };
 use attic::cache::CacheName;
 use attic::nix_store::StorePathHash;
-
-
-};
-};
-};
 
 /// The User-Agent string of Attic.
 const ATTIC_USER_AGENT: &str =
