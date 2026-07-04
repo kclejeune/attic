@@ -78,6 +78,19 @@ in
           llvmPackages_latest.bintools
           worker-build wasm-pack wasm-bindgen-cli
         ];
+
+        # nix 2.34's split .pc files transitively require these C libraries. The
+        # pure `nix build` derivation gets them via propagation, but an
+        # interactive `nix develop` does not — without them `pkg-config nix-main`
+        # (in attic's build.rs) fails to resolve, and on macOS the too-old system
+        # libcurl leaks in. Adding them puts their `.pc` files on PKG_CONFIG_PATH.
+        nixDeps = with pkgs; [
+          curl
+          libgit2
+          libsodium
+          libblake3
+          brotli
+        ];
       };
 
       devShells.default = pkgs.mkShell (lib.recursiveUpdate {
