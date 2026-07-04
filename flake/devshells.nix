@@ -97,6 +97,14 @@ in
 
           # Used by `just with-nix` to build/test with alternative Nix versions.
           NIX_VERSIONS = config.attic.nix-versions.manifestFile;
+
+          # A leaked CPATH/LIBRARY_PATH (e.g. Homebrew's `/opt/homebrew/include`
+          # or a manual export of the CommandLineTools SDK) is searched ahead of
+          # nix's headers, shadowing libc++ and breaking the cxx / aws-lc-sys
+          # C/C++ builds on macOS. Clear them so `cargo build` matches the pure
+          # `nix build` derivation, which strips them.
+          CPATH = "";
+          LIBRARY_PATH = "";
         };
       } cfg.extraArgs);
 
