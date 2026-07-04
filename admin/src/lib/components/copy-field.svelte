@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Copy, Check } from '@lucide/svelte';
+	import { toast } from 'svelte-sonner';
 
 	let {
 		text,
@@ -13,9 +14,11 @@
 		try {
 			await navigator.clipboard.writeText(text);
 			copied = true;
+			toast.success('Copied to clipboard');
 			setTimeout(() => (copied = false), 1500);
 		} catch {
 			copied = false;
+			toast.error('Could not copy to clipboard');
 		}
 	}
 </script>
