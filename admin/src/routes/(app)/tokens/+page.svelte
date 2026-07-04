@@ -3,7 +3,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
-	import CopyButton from '$lib/components/copy-button.svelte';
+	import CopyField from '$lib/components/copy-field.svelte';
 	import TokenScopeFields from '$lib/components/token-scope-fields.svelte';
 	import { KeyRound, Trash2, TriangleAlert } from '@lucide/svelte';
 
@@ -44,12 +44,7 @@
 				<TriangleAlert class="size-4 text-primary" />
 				Copy “{form.issued.name}” now — it won't be shown again.
 			</div>
-			<div class="flex items-center gap-2">
-				<div class="flex h-9 min-w-0 flex-1 items-center rounded-md bg-background px-3">
-					<code class="min-w-0 flex-1 truncate font-mono text-xs">{form.issued.token}</code>
-				</div>
-				<CopyButton text={form.issued.token} label="Copy token" />
-			</div>
+			<CopyField text={form.issued.token} label="Copy token" />
 		</div>
 	{/if}
 

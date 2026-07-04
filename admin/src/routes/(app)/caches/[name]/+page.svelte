@@ -2,6 +2,7 @@
 	import { formatBytes, formatCount } from '$lib/format';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import CopyButton from '$lib/components/copy-button.svelte';
+	import CopyField from '$lib/components/copy-field.svelte';
 	import { ArrowLeft, Lock, Globe, ChevronLeft, ChevronRight } from '@lucide/svelte';
 
 	let { data } = $props();
@@ -59,34 +60,32 @@
 		<dl class="mt-4 space-y-3">
 			<div>
 				<dt class="mb-1 text-xs text-muted-foreground">Substituter URL</dt>
-				<dd class="flex items-center gap-2">
-					<div class="flex h-9 min-w-0 flex-1 items-center rounded-md bg-muted px-3">
-						<code class="min-w-0 flex-1 truncate font-mono text-xs">{c.url}</code>
-					</div>
-					<CopyButton text={c.url} label="Copy URL" />
-				</dd>
+				<dd><CopyField text={c.url} label="Copy URL" /></dd>
 			</div>
 			<div>
 				<dt class="mb-1 text-xs text-muted-foreground">Trusted public key</dt>
-				<dd class="flex items-center gap-2">
-					<div class="flex h-9 min-w-0 flex-1 items-center rounded-md bg-muted px-3">
-						<code class="min-w-0 flex-1 truncate font-mono text-xs">{c.publicKey ?? 'unavailable'}</code>
-					</div>
+				<dd>
 					{#if c.publicKey}
-						<CopyButton text={c.publicKey} label="Copy public key" />
+						<CopyField text={c.publicKey} label="Copy public key" />
+					{:else}
+						<div class="rounded-md border border-input bg-muted px-3 py-2.5 font-mono text-xs text-muted-foreground">
+							unavailable
+						</div>
 					{/if}
 				</dd>
 			</div>
 		</dl>
 
 		<div class="mt-4">
-			<div class="mb-1 flex items-center justify-between">
-				<span class="text-xs text-muted-foreground">nix.conf</span>
-				<CopyButton text={nixConf} label="Copy nix.conf snippet" />
+			<span class="mb-1 block text-xs text-muted-foreground">nix.conf</span>
+			<div class="relative overflow-hidden rounded-md border border-input bg-muted">
+				<pre class="overflow-x-auto px-3 py-2.5 pr-12 font-mono text-xs leading-5"><code
+						>{nixConf}</code
+					></pre>
+				<div class="absolute top-1.5 right-1.5">
+					<CopyButton text={nixConf} label="Copy nix.conf snippet" />
+				</div>
 			</div>
-			<pre class="overflow-x-auto rounded-md bg-muted px-3 py-2.5 font-mono text-xs"><code
-					>{nixConf}</code
-				></pre>
 		</div>
 	</section>
 

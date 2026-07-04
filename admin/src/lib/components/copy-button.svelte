@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { Copy, Check } from '@lucide/svelte';
 
-	let { text, label = 'Copy', class: className = '' }: { text: string; label?: string; class?: string } =
-		$props();
+	let {
+		text,
+		label = 'Copy',
+		class: className = ''
+	}: { text: string; label?: string; class?: string } = $props();
 
 	let copied = $state(false);
 
@@ -22,7 +25,7 @@
 	onclick={copy}
 	title={label}
 	aria-label={label}
-	class="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-input bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground {className}"
+	class="inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground {className}"
 >
 	{#if copied}
 		<Check class="size-4 text-primary" />
