@@ -29,27 +29,30 @@ function base64urlJson(value: unknown): string {
 }
 
 /**
- * Mint a short-lived attic JWT.
+ * Mint an attic JWT.
  *
  * @param secretBase64 base64-encoded HS256 secret (same one the attic worker validates with)
  * @param sub subject (the acting user's id)
  * @param caches the cache access map to grant
- * @param ttlSeconds token lifetime (default 5 minutes — just long enough for a request)
+ * @param ttlSeconds token lifetime (default 5 minutes — for internal service-binding calls)
+ * @param jti optional JWT ID; set it for admin-issued tokens so they can be revoked
  */
 export async function mintAtticToken(
 	secretBase64: string,
 	sub: string,
 	caches: CacheAccess,
-	ttlSeconds = 300
+	ttlSeconds = 300,
+	jti?: string
 ): Promise<string> {
 	const now = Math.floor(Date.now() / 1000);
 	const header = { alg: 'HS256', typ: 'JWT' };
-	const payload = {
+	const payload: Record<string, unknown> = {
 		sub,
 		iat: now,
 		exp: now + ttlSeconds,
 		[CLAIM_NAMESPACE]: { caches }
 	};
+	if (jti) payload.jti = jti;
 
 	const signingInput = `${base64urlJson(header)}.${base64urlJson(payload)}`;
 
