@@ -17,6 +17,8 @@ export interface Bucket {
 	paths: number;
 	/** Bytes added in this bucket. */
 	bytes: number;
+	/** Cumulative paths through this bucket (includes pre-range baseline). */
+	cumulativePaths: number;
 	/** Cumulative bytes through this bucket (includes pre-range baseline). */
 	cumulativeBytes: number;
 }
@@ -110,14 +112,18 @@ export const load: PageServerLoad = async ({ platform, url }) => {
 		).all<BucketRow>()
 	).results;
 
-	// Cumulative storage should include everything added before the range starts.
-	let baseline = 0;
+	// Cumulative series should include everything added before the range starts.
+	let basePaths = 0;
+	let baseBytes = 0;
 	if (startDate) {
 		const row = await db
-			.prepare(`SELECT COALESCE(SUM(ch.file_size), 0) AS n ${NAR_BYTES_JOIN} WHERE o.created_at < ?1`)
+			.prepare(
+				`SELECT COUNT(*) AS paths, COALESCE(SUM(ch.file_size), 0) AS bytes ${NAR_BYTES_JOIN} WHERE o.created_at < ?1`
+			)
 			.bind(startDate)
-			.first<{ n: number }>();
-		baseline = row?.n ?? 0;
+			.first<{ paths: number; bytes: number }>();
+		basePaths = row?.paths ?? 0;
+		baseBytes = row?.bytes ?? 0;
 	}
 
 	// Nothing ever pushed and no window to draw → empty state.
@@ -133,13 +139,22 @@ export const load: PageServerLoad = async ({ platform, url }) => {
 	const endMs = bucketStart(now, granularity);
 
 	const buckets: Bucket[] = [];
-	let cumulative = baseline;
+	let cumPaths = basePaths;
+	let cumBytes = baseBytes;
 	for (let ms = firstMs, i = 0; ms <= endMs && i < 800; ms = nextBucket(ms, granularity), i++) {
 		const key = iso(ms);
 		const row = byBucket.get(key);
+		const paths = row?.paths ?? 0;
 		const bytes = row?.bytes ?? 0;
-		cumulative += bytes;
-		buckets.push({ date: key, paths: row?.paths ?? 0, bytes, cumulativeBytes: cumulative });
+		cumPaths += paths;
+		cumBytes += bytes;
+		buckets.push({
+			date: key,
+			paths,
+			bytes,
+			cumulativePaths: cumPaths,
+			cumulativeBytes: cumBytes
+		});
 	}
 
 	return { buckets, granularity, range };
@@ -147,14 +162,16 @@ export const load: PageServerLoad = async ({ platform, url }) => {
 
 function sampleBuckets(granularity: Granularity): Bucket[] {
 	const out: Bucket[] = [];
-	let cumulative = 0;
+	let cumPaths = 0;
+	let cumBytes = 0;
 	const step = granularity === 'day' ? DAY_MS : granularity === 'month' ? 30 * DAY_MS : 7 * DAY_MS;
 	const start = Date.UTC(2026, 0, 5);
 	for (let i = 0; i < 20; i++) {
 		const paths = Math.round(20 + 60 * Math.abs(Math.sin(i / 2)) + (i % 3) * 12);
 		const bytes = paths * (4_000_000 + (i % 4) * 1_500_000);
-		cumulative += bytes;
-		out.push({ date: iso(start + i * step), paths, bytes, cumulativeBytes: cumulative });
+		cumPaths += paths;
+		cumBytes += bytes;
+		out.push({ date: iso(start + i * step), paths, bytes, cumulativePaths: cumPaths, cumulativeBytes: cumBytes });
 	}
 	return out;
 }

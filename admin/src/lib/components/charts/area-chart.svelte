@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { tickIndices } from '$lib/chart-ticks';
+
 	interface Point {
 		label: string;
 		value: number;
@@ -6,8 +8,9 @@
 
 	let {
 		points,
-		format = (v: number) => String(v)
-	}: { points: Point[]; format?: (v: number) => string } = $props();
+		format = (v: number) => String(v),
+		ariaLabel = 'Cumulative over time'
+	}: { points: Point[]; format?: (v: number) => string; ariaLabel?: string } = $props();
 
 	// Fixed drawing coordinates; the SVG scales to the container via CSS.
 	const W = 720,
@@ -32,18 +35,11 @@
 	);
 
 	const ticks = $derived([0, 0.5, 1].map((f) => ({ v: f * max, y: yAt(f * max) })));
-
-	// Up to `count` evenly spaced, de-duplicated indices across the series.
-	function pickIndices(n: number, count: number): number[] {
-		if (n <= 0) return [];
-		if (n <= count) return [...Array(n).keys()];
-		const step = (n - 1) / (count - 1);
-		return Array.from({ length: count }, (_, k) => Math.round(k * step)).filter(
-			(v, i, a) => a.indexOf(v) === i
-		);
-	}
 	const xLabels = $derived(
-		pickIndices(points.length, 6).map((i) => ({ x: xAt(i), label: points[i].label }))
+		tickIndices(
+			points.map((p) => p.label),
+			7
+		).map((i) => ({ x: xAt(i), label: points[i].label }))
 	);
 
 	let hovered = $state<number | null>(null);
@@ -58,7 +54,7 @@
 </script>
 
 <div class="relative">
-	<svg viewBox="0 0 {W} {H}" class="w-full" role="img" aria-label="Cumulative storage over time">
+	<svg viewBox="0 0 {W} {H}" class="w-full" role="img" aria-label={ariaLabel}>
 		<!-- gridlines + y labels -->
 		{#each ticks as t (t.v)}
 			<line x1={padL} x2={W - padR} y1={t.y} y2={t.y} class="stroke-border" stroke-width="1" />

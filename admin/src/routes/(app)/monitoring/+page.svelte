@@ -2,14 +2,13 @@
 	import { formatBytes, formatCount } from '$lib/format';
 	import { goto } from '$app/navigation';
 	import AreaChart from '$lib/components/charts/area-chart.svelte';
-	import BarChart from '$lib/components/charts/bar-chart.svelte';
 
 	let { data } = $props();
 	const b = $derived(data.buckets);
 
 	const storagePoints = $derived(b.map((w) => ({ label: w.date, value: w.cumulativeBytes })));
-	const pushBars = $derived(b.map((w) => ({ label: w.date, value: w.paths })));
-	const totalPaths = $derived(b.reduce((n, w) => n + w.paths, 0));
+	const pathPoints = $derived(b.map((w) => ({ label: w.date, value: w.cumulativePaths })));
+	const totalPaths = $derived(b.length ? b[b.length - 1].cumulativePaths : 0);
 	const peak = $derived(b.reduce((m, w) => Math.max(m, w.paths), 0));
 
 	const unit = $derived(
@@ -84,18 +83,18 @@
 					{formatBytes(b[b.length - 1].cumulativeBytes)} total
 				</span>
 			</div>
-			<AreaChart points={storagePoints} format={formatBytes} />
+			<AreaChart points={storagePoints} format={formatBytes} ariaLabel="Cumulative storage over time" />
 		</section>
 
 		<section class="rounded-lg border bg-card p-5">
 			<div class="mb-4 flex items-baseline justify-between">
-				<h2 class="text-sm font-medium">Store paths added</h2>
+				<h2 class="text-sm font-medium">Store paths</h2>
 				<span class="text-sm text-muted-foreground">
 					<span class="font-mono text-foreground">{formatCount(totalPaths)}</span> total ·
 					peak <span class="font-mono text-foreground">{formatCount(peak)}</span>/{unit}
 				</span>
 			</div>
-			<BarChart bars={pushBars} format={formatCount} />
+			<AreaChart points={pathPoints} format={formatCount} ariaLabel="Cumulative store paths over time" />
 		</section>
 	{/if}
 </div>
