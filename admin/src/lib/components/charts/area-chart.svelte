@@ -32,12 +32,18 @@
 	);
 
 	const ticks = $derived([0, 0.5, 1].map((f) => ({ v: f * max, y: yAt(f * max) })));
+
+	// Up to `count` evenly spaced, de-duplicated indices across the series.
+	function pickIndices(n: number, count: number): number[] {
+		if (n <= 0) return [];
+		if (n <= count) return [...Array(n).keys()];
+		const step = (n - 1) / (count - 1);
+		return Array.from({ length: count }, (_, k) => Math.round(k * step)).filter(
+			(v, i, a) => a.indexOf(v) === i
+		);
+	}
 	const xLabels = $derived(
-		points.length
-			? [0, Math.floor((points.length - 1) / 2), points.length - 1]
-					.filter((i, idx, a) => a.indexOf(i) === idx)
-					.map((i) => ({ x: xAt(i), label: points[i].label }))
-			: []
+		pickIndices(points.length, 6).map((i) => ({ x: xAt(i), label: points[i].label }))
 	);
 
 	let hovered = $state<number | null>(null);

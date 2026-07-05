@@ -25,12 +25,18 @@
 	const hAt = (v: number) => (v / max) * innerH;
 
 	const ticks = $derived([0, 0.5, 1].map((f) => ({ v: f * max, y: padT + innerH - f * innerH })));
+
+	// Up to `count` evenly spaced, de-duplicated indices across the series.
+	function pickIndices(n: number, count: number): number[] {
+		if (n <= 0) return [];
+		if (n <= count) return [...Array(n).keys()];
+		const step = (n - 1) / (count - 1);
+		return Array.from({ length: count }, (_, k) => Math.round(k * step)).filter(
+			(v, i, a) => a.indexOf(v) === i
+		);
+	}
 	const xLabels = $derived(
-		bars.length
-			? [0, Math.floor((bars.length - 1) / 2), bars.length - 1]
-					.filter((i, idx, a) => a.indexOf(i) === idx)
-					.map((i) => ({ x: xAt(i) + barW / 2, label: bars[i].label }))
-			: []
+		pickIndices(bars.length, 6).map((i) => ({ x: xAt(i) + barW / 2, label: bars[i].label }))
 	);
 
 	let hovered = $state<number | null>(null);
@@ -45,6 +51,16 @@
 			</text>
 		{/each}
 
+		{#if hovered !== null}
+			<rect
+				x={padL + hovered * slot}
+				y={padT}
+				width={slot}
+				height={innerH}
+				class="pointer-events-none fill-muted/50"
+			/>
+		{/if}
+
 		{#each bars as bar, i (i)}
 			<rect
 				x={xAt(i)}
@@ -52,7 +68,22 @@
 				width={barW}
 				height={Math.max(0, hAt(bar.value))}
 				rx="3"
-				class="transition-colors {hovered === i ? 'fill-primary' : 'fill-primary/70'}"
+				class="pointer-events-none transition-colors {hovered === i
+					? 'fill-primary'
+					: 'fill-primary/70'}"
+				role="presentation"
+			/>
+		{/each}
+
+		<!-- Full-height hover targets so every bucket (including empty weeks) is
+			 inspectable, and a hovered empty bucket still reports its date + 0. -->
+		{#each bars as _bar, i (i)}
+			<rect
+				x={padL + i * slot}
+				y={padT}
+				width={slot}
+				height={innerH}
+				class="fill-transparent"
 				onpointerenter={() => (hovered = i)}
 				onpointerleave={() => (hovered = null)}
 				role="presentation"
