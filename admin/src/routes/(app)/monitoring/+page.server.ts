@@ -94,37 +94,41 @@ export const load: PageServerLoad = async ({ platform, url }) => {
 	const startMs = rangeStart(range, now);
 	const startDate = startMs === null ? null : iso(bucketStart(startMs, granularity));
 
-	const rows = (
-		await (startDate
-			? db.prepare(
+	// The bucketed series and the pre-range baseline are independent — run them
+	// together.
+	const seriesStmt = startDate
+		? db
+				.prepare(
 					`SELECT ${bucketExpr(granularity)} AS bucket, COUNT(*) AS paths,
 					        COALESCE(SUM(ch.file_size), 0) AS bytes
 					 ${NAR_BYTES_JOIN}
 					 WHERE o.created_at >= ?1
 					 GROUP BY bucket ORDER BY bucket`
-				).bind(startDate)
-			: db.prepare(
-					`SELECT ${bucketExpr(granularity)} AS bucket, COUNT(*) AS paths,
-					        COALESCE(SUM(ch.file_size), 0) AS bytes
-					 ${NAR_BYTES_JOIN}
-					 GROUP BY bucket ORDER BY bucket`
 				)
-		).all<BucketRow>()
-	).results;
-
+				.bind(startDate)
+		: db.prepare(
+				`SELECT ${bucketExpr(granularity)} AS bucket, COUNT(*) AS paths,
+				        COALESCE(SUM(ch.file_size), 0) AS bytes
+				 ${NAR_BYTES_JOIN}
+				 GROUP BY bucket ORDER BY bucket`
+			);
 	// Cumulative series should include everything added before the range starts.
-	let basePaths = 0;
-	let baseBytes = 0;
-	if (startDate) {
-		const row = await db
-			.prepare(
-				`SELECT COUNT(*) AS paths, COALESCE(SUM(ch.file_size), 0) AS bytes ${NAR_BYTES_JOIN} WHERE o.created_at < ?1`
-			)
-			.bind(startDate)
-			.first<{ paths: number; bytes: number }>();
-		basePaths = row?.paths ?? 0;
-		baseBytes = row?.bytes ?? 0;
-	}
+	const baselineStmt = startDate
+		? db
+				.prepare(
+					`SELECT COUNT(*) AS paths, COALESCE(SUM(ch.file_size), 0) AS bytes ${NAR_BYTES_JOIN} WHERE o.created_at < ?1`
+				)
+				.bind(startDate)
+		: null;
+
+	const [seriesResult, baselineRow] = await Promise.all([
+		seriesStmt.all<BucketRow>(),
+		baselineStmt ? baselineStmt.first<{ paths: number; bytes: number }>() : Promise.resolve(null)
+	]);
+
+	const rows = seriesResult.results;
+	const basePaths = baselineRow?.paths ?? 0;
+	const baseBytes = baselineRow?.bytes ?? 0;
 
 	// Nothing ever pushed and no window to draw → empty state.
 	if (rows.length === 0 && startDate === null) {

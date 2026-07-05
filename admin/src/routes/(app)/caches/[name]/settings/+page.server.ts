@@ -1,8 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { atticFetch, adminAccess } from '$lib/server/attic-api';
+import { CACHE_NAME_RE } from '$lib/utils';
 import type { PageServerLoad, Actions } from './$types';
-
-const CACHE_NAME = /^[a-z0-9][a-z0-9-]{0,49}$/;
 
 interface CacheRow {
 	name: string;
@@ -78,7 +77,7 @@ export const actions: Actions = {
 
 		const newName = String((await request.formData()).get('new_name') ?? '').trim();
 
-		if (!CACHE_NAME.test(newName)) {
+		if (!CACHE_NAME_RE.test(newName)) {
 			return fail(400, {
 				renameError: 'Name must be lowercase alphanumeric with dashes (max 50 chars).'
 			});

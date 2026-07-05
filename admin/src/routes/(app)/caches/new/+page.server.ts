@@ -1,8 +1,7 @@
 import { fail, redirect, error } from '@sveltejs/kit';
 import { atticFetch, adminAccess } from '$lib/server/attic-api';
+import { CACHE_NAME_RE } from '$lib/utils';
 import type { Actions } from './$types';
-
-const CACHE_NAME = /^[a-z0-9][a-z0-9-]{0,49}$/;
 
 export const actions: Actions = {
 	default: async ({ request, locals, platform }) => {
@@ -17,7 +16,7 @@ export const actions: Actions = {
 		const retentionRaw = String(form.get('retention_period') ?? '').trim();
 		const retention = retentionRaw === '' ? null : Number(retentionRaw);
 
-		if (!CACHE_NAME.test(name)) {
+		if (!CACHE_NAME_RE.test(name)) {
 			return fail(400, {
 				error: 'Name must be lowercase alphanumeric with dashes (max 50 chars).',
 				values: { name, isPublic, priority, compression, retentionRaw }

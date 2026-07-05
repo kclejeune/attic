@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS object (
 
 CREATE INDEX IF NOT EXISTS idx_object_cache_hash ON object(cache_id, store_path_hash);
 CREATE INDEX IF NOT EXISTS idx_object_nar ON object(nar_id);
+-- Store-path browsing: order/filter by date or name within a cache.
+CREATE INDEX IF NOT EXISTS idx_object_cache_created ON object(cache_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_object_cache_path ON object(cache_id, store_path);
 
 -- Chunk table (deduplicated storage units)
 CREATE TABLE IF NOT EXISTS chunk (

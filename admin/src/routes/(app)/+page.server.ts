@@ -10,7 +10,11 @@ export const load: PageServerLoad = async ({ platform }) => {
 
 	const [caches, objects, nars, storage, pending, orphanNars, orphanChunks] = await Promise.all([
 		db.prepare('SELECT COUNT(*) AS n FROM cache WHERE deleted_at IS NULL').first<Count>(),
-		db.prepare('SELECT COUNT(*) AS n FROM object').first<Count>(),
+		db
+			.prepare(
+				'SELECT COUNT(*) AS n FROM object o JOIN cache c ON c.id = o.cache_id WHERE c.deleted_at IS NULL'
+			)
+			.first<Count>(),
 		db.prepare("SELECT COUNT(*) AS n FROM nar WHERE state = 'V'").first<Count>(),
 		db.prepare("SELECT COALESCE(SUM(file_size), 0) AS n FROM chunk WHERE state = 'V'").first<Count>(),
 		db.prepare("SELECT COUNT(*) AS n FROM nar WHERE state = 'P'").first<Count>(),
