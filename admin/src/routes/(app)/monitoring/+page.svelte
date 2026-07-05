@@ -6,14 +6,23 @@
 	let { data } = $props();
 	const b = $derived(data.buckets);
 
-	const storagePoints = $derived(b.map((w) => ({ label: w.date, value: w.cumulativeBytes })));
-	const pathPoints = $derived(b.map((w) => ({ label: w.date, value: w.cumulativePaths })));
+	const totalBytes = $derived(b.length ? b[b.length - 1].cumulativeBytes : 0);
 	const totalPaths = $derived(b.length ? b[b.length - 1].cumulativePaths : 0);
-	const peak = $derived(b.reduce((m, w) => Math.max(m, w.paths), 0));
-
-	const unit = $derived(
-		data.granularity === 'day' ? 'day' : data.granularity === 'month' ? 'mo' : 'wk'
+	const peakBucket = $derived(
+		b.reduce((m, w) => (w.paths > m.paths ? w : m), { paths: 0, date: '' })
 	);
+
+	const storagePoints = $derived(
+		b.map((w) => ({ label: w.date, value: w.cumulativeBytes, delta: w.bytes }))
+	);
+	const pathPoints = $derived(
+		b.map((w) => ({ label: w.date, value: w.cumulativePaths, delta: w.paths }))
+	);
+
+	const unitWord = $derived(
+		data.granularity === 'day' ? 'day' : data.granularity === 'month' ? 'month' : 'week'
+	);
+	const perLabel = $derived(`this ${unitWord}`);
 
 	const RANGES: [string, string][] = [
 		['30d', '30d'],
@@ -39,11 +48,7 @@
 	}
 </script>
 
-{#snippet segmented(
-	options: [string, string][],
-	active: string,
-	pick: (v: string) => void
-)}
+{#snippet segmented(options: [string, string][], active: string, pick: (v: string) => void)}
 	<div class="inline-flex rounded-md border border-input p-0.5 text-xs">
 		{#each options as [val, label] (val)}
 			<button
@@ -56,6 +61,14 @@
 				{label}
 			</button>
 		{/each}
+	</div>
+{/snippet}
+
+{#snippet stat(label: string, value: string, sub?: string)}
+	<div class="rounded-lg border bg-card p-5">
+		<div class="text-xs text-muted-foreground">{label}</div>
+		<div class="mt-1 font-mono text-2xl font-semibold tracking-tight">{value}</div>
+		{#if sub}<div class="mt-0.5 text-xs text-muted-foreground">{sub}</div>{/if}
 	</div>
 {/snippet}
 
@@ -76,25 +89,42 @@
 			<p class="text-sm text-muted-foreground">No activity to chart yet.</p>
 		</div>
 	{:else}
+		<div class="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
+			{@render stat('Total storage', formatBytes(totalBytes))}
+			{@render stat('Store paths', formatCount(totalPaths))}
+			{@render stat(
+				`Busiest ${unitWord}`,
+				formatCount(peakBucket.paths),
+				peakBucket.date ? `${peakBucket.date} · paths added` : undefined
+			)}
+		</div>
+
 		<section class="mb-8 rounded-lg border bg-card p-5">
 			<div class="mb-4 flex items-baseline justify-between">
 				<h2 class="text-sm font-medium">Storage growth</h2>
-				<span class="font-mono text-sm text-muted-foreground">
-					{formatBytes(b[b.length - 1].cumulativeBytes)} total
-				</span>
+				<span class="font-mono text-sm text-muted-foreground">{formatBytes(totalBytes)} total</span>
 			</div>
-			<AreaChart points={storagePoints} format={formatBytes} ariaLabel="Cumulative storage over time" />
+			<AreaChart
+				points={storagePoints}
+				format={formatBytes}
+				deltaFormat={formatBytes}
+				deltaLabel={perLabel}
+				ariaLabel="Cumulative storage over time"
+			/>
 		</section>
 
 		<section class="rounded-lg border bg-card p-5">
 			<div class="mb-4 flex items-baseline justify-between">
 				<h2 class="text-sm font-medium">Store paths</h2>
-				<span class="text-sm text-muted-foreground">
-					<span class="font-mono text-foreground">{formatCount(totalPaths)}</span> total ·
-					peak <span class="font-mono text-foreground">{formatCount(peak)}</span>/{unit}
-				</span>
+				<span class="font-mono text-sm text-muted-foreground">{formatCount(totalPaths)} total</span>
 			</div>
-			<AreaChart points={pathPoints} format={formatCount} ariaLabel="Cumulative store paths over time" />
+			<AreaChart
+				points={pathPoints}
+				format={formatCount}
+				deltaFormat={formatCount}
+				deltaLabel={perLabel}
+				ariaLabel="Cumulative store paths over time"
+			/>
 		</section>
 	{/if}
 </div>

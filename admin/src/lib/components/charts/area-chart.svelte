@@ -4,13 +4,23 @@
 	interface Point {
 		label: string;
 		value: number;
+		/** Per-period change at this point, surfaced on hover. */
+		delta?: number;
 	}
 
 	let {
 		points,
 		format = (v: number) => String(v),
+		deltaFormat = (v: number) => String(v),
+		deltaLabel = '',
 		ariaLabel = 'Cumulative over time'
-	}: { points: Point[]; format?: (v: number) => string; ariaLabel?: string } = $props();
+	}: {
+		points: Point[];
+		format?: (v: number) => string;
+		deltaFormat?: (v: number) => string;
+		deltaLabel?: string;
+		ariaLabel?: string;
+	} = $props();
 
 	// Fixed drawing coordinates; the SVG scales to the container via CSS.
 	const W = 720,
@@ -113,6 +123,9 @@
 			style="left: calc({padL / W * 100}% + {frac} * (100% - {(padL + padR) / W * 100}%))"
 		>
 			<div class="font-medium">{format(points[hovered].value)}</div>
+			{#if points[hovered].delta}
+				<div class="text-primary">+{deltaFormat(points[hovered].delta ?? 0)} {deltaLabel}</div>
+			{/if}
 			<div class="text-muted-foreground">{points[hovered].label}</div>
 		</div>
 	{/if}
