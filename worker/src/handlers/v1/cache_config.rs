@@ -117,6 +117,23 @@ pub async fn create_cache(mut req: Request, ctx: RouteContext<()>) -> Result<Res
         return Ok(WorkerError::Authorization(format!("Permission denied: {:?}", e)).to_response());
     }
 
+    // A live cache with this name blocks creation; a soft-deleted tombstone is
+    // purged so the name (and its storage) can be reused.
+    match state.database.find_cache(&cache_name).await {
+        Ok(Some(_)) => {
+            return Ok(WorkerError::Conflict(format!(
+                "A cache named \"{}\" already exists",
+                cache_name
+            ))
+            .to_response())
+        }
+        Ok(None) => {}
+        Err(e) => return Ok(e.to_response()),
+    }
+    if let Err(e) = state.database.purge_deleted_cache(&cache_name).await {
+        return Ok(e.to_response());
+    }
+
     // Parse request body
     let body: serde_json::Value = req
         .json()
@@ -398,6 +415,12 @@ pub async fn rename_cache(mut req: Request, ctx: RouteContext<()>) -> Result<Res
     if cache_name == body.new_name {
         return Ok(WorkerError::BadRequest("New name matches the current name".to_string())
             .to_response());
+    }
+
+    // Free the target name if only a soft-deleted tombstone holds it (a live one
+    // makes rename_cache return Conflict below).
+    if let Err(e) = state.database.purge_deleted_cache(&body.new_name).await {
+        return Ok(e.to_response());
     }
 
     match state.database.rename_cache(&cache_name, &body.new_name).await {

@@ -165,7 +165,8 @@ export const actions: Actions = {
 			return fail(400, { error: 'Add another owner before deleting the last one.' });
 		}
 
-		// D1 does not enforce foreign keys, so clean up dependents explicitly.
+		// D1 enforces FKs but the schema has no ON DELETE CASCADE, so delete
+		// dependents before the user row (children first).
 		await db.batch([
 			db.prepare('DELETE FROM api_token WHERE user_id = ?1').bind(userId),
 			db.prepare('DELETE FROM session WHERE userId = ?1').bind(userId),

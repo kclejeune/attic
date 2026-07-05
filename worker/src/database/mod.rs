@@ -213,6 +213,15 @@ impl Database {
         }
     }
 
+    /// Purge a soft-deleted cache holding `name` (and its objects), freeing the
+    /// name for reuse. No-op if only a live cache or nothing holds the name.
+    pub async fn purge_deleted_cache(&self, name: &str) -> WorkerResult<()> {
+        match self {
+            Database::D1(backend) => backend.purge_deleted_cache(name).await,
+            Database::Turso(backend) => backend.purge_deleted_cache(name).await,
+        }
+    }
+
     /// Insert a new pending chunked-upload row.
     pub async fn create_pending_upload(&self, upload: &PendingUpload) -> WorkerResult<()> {
         match self {

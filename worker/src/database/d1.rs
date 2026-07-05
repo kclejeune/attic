@@ -577,12 +577,12 @@ impl D1Backend {
 
     /// Rename a cache, keeping its keypair (and thus its signing key name) intact.
     ///
-    /// The target name is rejected if any cache — live or soft-deleted — already
-    /// holds it, since `name` is globally unique.
+    /// Rejected only if a *live* cache already holds the target name; a
+    /// soft-deleted tombstone should be purged first (see `purge_deleted_cache`).
     pub async fn rename_cache(&self, old: &str, new: &str) -> WorkerResult<RenameOutcome> {
         let taken = self
             .db
-            .prepare("SELECT 1 FROM cache WHERE name = ?1")
+            .prepare("SELECT 1 FROM cache WHERE name = ?1 AND deleted_at IS NULL")
             .bind(&[new.into()])
             .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?
             .first::<serde_json::Value>(None)
@@ -611,6 +611,30 @@ impl D1Backend {
         } else {
             RenameOutcome::NotFound
         })
+    }
+
+    /// Hard-remove any *soft-deleted* cache holding `name`, plus its objects and
+    /// pending uploads, freeing the name for reuse. Orphaned NARs/chunks are
+    /// reclaimed by the GC cron. Live caches are never touched.
+    pub async fn purge_deleted_cache(&self, name: &str) -> WorkerResult<()> {
+        // Dependents first (D1 does not cascade), cache row last so the subqueries
+        // can still resolve its id.
+        for sql in [
+            "DELETE FROM object WHERE cache_id IN \
+             (SELECT id FROM cache WHERE name = ?1 AND deleted_at IS NOT NULL)",
+            "DELETE FROM pending_upload WHERE cache_id IN \
+             (SELECT id FROM cache WHERE name = ?1 AND deleted_at IS NOT NULL)",
+            "DELETE FROM cache WHERE name = ?1 AND deleted_at IS NOT NULL",
+        ] {
+            self.db
+                .prepare(sql)
+                .bind(&[name.into()])
+                .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?
+                .run()
+                .await
+                .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+        }
+        Ok(())
     }
 
     /// Insert a new pending chunked-upload row.
