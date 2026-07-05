@@ -1,5 +1,11 @@
 # Follow-up plan — worker↔server consolidation & dual-server admin
 
+> **Executing this?** The step-by-step, subagent-ready version — with exact file
+> paths, function signatures, build/deploy commands, the signing-invariant
+> guardrail, and verification steps — is in
+> [`consolidation-implementation-guide.md`](./consolidation-implementation-guide.md).
+> This file is the high-level rationale; that one is the how-to.
+
 These items came out of the consolidation audit but were **excluded from the
 `/simplify` cleanup pass** because each either touches a deployed hot path
 (signing / upload / pull) that can only be wasm-compile-verified here, not
