@@ -1,7 +1,12 @@
 import { error } from '@sveltejs/kit';
+import {
+	PATHS_PAGE_SIZE,
+	parseSort,
+	parseDir,
+	queryStorePaths,
+	countStorePaths
+} from '$lib/server/store-paths';
 import type { PageServerLoad } from './$types';
-
-const PAGE_SIZE = 50;
 
 interface CacheRow {
 	name: string;
@@ -29,19 +34,13 @@ function derivePublicKey(keypair: string): string | null {
 	}
 }
 
-interface PathRow {
-	store_path: string;
-	store_path_hash: string;
-	nar_size: number;
-	created_at: string;
-}
-
 export const load: PageServerLoad = async ({ platform, params, url }) => {
 	const db = platform?.env.ATTIC_DB;
 	if (!db) throw error(500, 'Database binding unavailable');
 
-	const page = Math.max(0, Number(url.searchParams.get('page') ?? '0'));
-	const offset = page * PAGE_SIZE;
+	const sort = parseSort(url.searchParams.get('sort'));
+	const dir = parseDir(url.searchParams.get('dir'));
+	const q = (url.searchParams.get('q') ?? '').trim();
 
 	const cache = await db
 		.prepare(
@@ -56,28 +55,10 @@ export const load: PageServerLoad = async ({ platform, params, url }) => {
 	const cacheBase = (platform?.env.CACHE_BASE_URL ?? 'https://cache.kclj.io').replace(/\/$/, '');
 	const publicKey = derivePublicKey(cache.keypair);
 
-	const [{ results: paths }, totals] = await Promise.all([
-		db
-			.prepare(
-				`SELECT o.store_path, o.store_path_hash, n.nar_size, o.created_at
-				 FROM object o
-				 JOIN cache c ON c.id = o.cache_id
-				 JOIN nar n ON n.id = o.nar_id
-				 WHERE c.name = ?1
-				 ORDER BY o.created_at DESC
-				 LIMIT ?2 OFFSET ?3`
-			)
-			.bind(params.name, PAGE_SIZE, offset)
-			.all<PathRow>(),
-		db
-			.prepare(
-				`SELECT COUNT(*) AS n FROM object o JOIN cache c ON c.id = o.cache_id WHERE c.name = ?1`
-			)
-			.bind(params.name)
-			.first<{ n: number }>()
+	const [{ paths, hasMore }, total] = await Promise.all([
+		queryStorePaths(db, params.name, { sort, dir, q, limit: PATHS_PAGE_SIZE, offset: 0 }),
+		countStorePaths(db, params.name, q)
 	]);
-
-	const total = totals?.n ?? 0;
 
 	return {
 		cache: {
@@ -90,15 +71,11 @@ export const load: PageServerLoad = async ({ platform, params, url }) => {
 			url: `${cacheBase}/${cache.name}`,
 			publicKey
 		},
-		paths: paths.map((p) => ({
-			storePath: p.store_path,
-			hash: p.store_path_hash,
-			narSize: p.nar_size,
-			createdAt: p.created_at
-		})),
-		page,
-		pageSize: PAGE_SIZE,
+		paths,
+		hasMore,
 		total,
-		hasMore: offset + paths.length < total
+		sort,
+		dir,
+		q
 	};
 };
