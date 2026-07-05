@@ -24,6 +24,10 @@ use crate::database::entity::nar::{self, Entity as Nar, NarState};
 use crate::database::entity::object::{self, Entity as Object};
 use crate::storage::StorageBackend;
 
+/// Grace period (days) before a soft-deleted, never-reused cache is hard-reaped.
+/// Generous, so an accidental delete stays recoverable for a while.
+const ABANDONED_CACHE_GRACE_DAYS: i64 = 7;
+
 #[derive(Debug, FromQueryResult)]
 struct CacheIdAndRetentionPeriod {
     id: i64,
@@ -71,8 +75,34 @@ pub async fn run_garbage_collection_once(config: Config) -> Result<()> {
 
     let state = StateInner::new(config).await;
     run_time_based_garbage_collection(&state).await?;
+    run_reap_abandoned_caches(&state).await?;
     run_reap_orphan_nars(&state).await?;
     run_reap_orphan_chunks(&state).await?;
+
+    Ok(())
+}
+
+/// Hard-reap caches that were soft-deleted and never reused past the grace
+/// period. `object -> cache` is `ON DELETE CASCADE`, so deleting the cache row
+/// removes its objects; the orphan-NAR/chunk sweeps that follow reclaim the
+/// freed storage. A no-op when `soft_delete_caches` is off (no tombstones exist).
+#[instrument(skip_all)]
+async fn run_reap_abandoned_caches(state: &State) -> Result<()> {
+    let db = state.database().await?;
+    let cutoff = Utc::now()
+        .checked_sub_signed(ChronoDuration::days(ABANDONED_CACHE_GRACE_DAYS))
+        .ok_or_else(|| anyhow!("computing abandoned-cache cutoff underflowed"))?;
+
+    let deletion = Cache::delete_many()
+        .filter(cache::Column::DeletedAt.is_not_null())
+        .filter(cache::Column::DeletedAt.lt(cutoff))
+        .exec(db)
+        .await?;
+
+    tracing::info!(
+        "Reaped {} abandoned soft-deleted cache(s)",
+        deletion.rows_affected
+    );
 
     Ok(())
 }

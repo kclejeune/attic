@@ -119,7 +119,10 @@ stored objects before/after.
   `deleted_at < now - 7d` are hard-reaped (objects + pending uploads + row), and
   the following orphan sweep frees their NAR/chunk bytes from R2. Verified against
   live D1 (reaped the December `brcache` tombstone; `kclejeune` untouched).
-  *Remaining:* mirror the sweep in `server/src/gc.rs` for atticd.
+  **atticd parity also DONE:** `server/src/gc.rs` gains `run_reap_abandoned_caches`
+  (7-day grace); `object -> cache` is `ON DELETE CASCADE`, so deleting the cache
+  row removes its objects and the existing orphan sweeps reclaim storage.
+  Host-compile verified (`cargo check -p attic-server`).
 - **D2. Cache rename parity in `atticd`** (also listed under B3, tracked here as a
   standalone parity item).
 - **D3.** Resolve dead `attic::api::v1::cache_config::supports_server_compression()`
