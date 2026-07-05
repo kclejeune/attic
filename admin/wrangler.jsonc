@@ -3,18 +3,27 @@
   "compatibility_date": "2025-09-01",
   "compatibility_flags": ["nodejs_compat"],
 
-  // adapter-cloudflare build output: _worker.js plus the static client assets
-  // (adapter also writes _routes.json in this directory).
-  "main": ".svelte-kit/cloudflare/_worker.js",
+  // Custom entry wrapping the adapter-cloudflare output (_worker.js in
+  // .svelte-kit/cloudflare) to add the scheduled GC handler.
+  "main": "worker-entry.ts",
   "assets": {
     "binding": "ASSETS",
     "directory": ".svelte-kit/cloudflare"
   },
   "observability": { "enabled": true },
 
-  // Custom domain: Cloudflare provisions the DNS record and edge certificate
-  // for this hostname automatically on deploy.
-  "routes": [{ "pattern": "app.cache.kclj.io", "custom_domain": true }],
+  // Nightly garbage collection (closure-aware retention, orphan reaping).
+  "triggers": { "crons": ["0 3 * * *"] },
+
+  // Custom domains: Cloudflare provisions the DNS records and edge
+  // certificates automatically on deploy. app.* serves the admin UI;
+  // cache.kclj.io is dispatched to the attic binary-cache API by
+  // hooks.server.ts (host match against CACHE_BASE_URL). Both MUST be
+  // declared here — wrangler removes domains not present in this config.
+  "routes": [
+    { "pattern": "app.cache.kclj.io", "custom_domain": true },
+    { "pattern": "cache.kclj.io", "custom_domain": true }
+  ],
 
   "vars": {
     "APP_URL": "https://app.cache.kclj.io",
@@ -22,6 +31,16 @@
     "CF_ACCESS_TEAM_DOMAIN": "https://kclejeune.cloudflareaccess.com",
     "CF_ACCESS_AUD": "623b56c404ad5907aad2ee0e6255d7c88f6e9aecf64ee2aca77090153c115217"
   },
+
+  // NAR/chunk storage, shared with the attic API worker — needed by the
+  // in-process binary-cache read path (served when requests arrive on the
+  // cache hostname).
+  "r2_buckets": [
+    {
+      "binding": "CACHE_BUCKET",
+      "bucket_name": "attic-cache"
+    }
+  ],
 
   // Shared D1 database with the attic API worker. The admin app owns the
   // user/api_token/session/audit_log tables; the attic worker owns cache/nar/etc.

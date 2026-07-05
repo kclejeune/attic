@@ -50,9 +50,7 @@
 				checked={v?.isPublic ?? false}
 				class="size-4 rounded border-input text-primary focus:ring-ring"
 			/>
-			<Label for="is_public" class="font-normal">
-				Public — anyone can pull without a token
-			</Label>
+			<Label for="is_public" class="font-normal">Public — anyone can pull without a token</Label>
 		</div>
 
 		<div class="grid grid-cols-2 gap-4">

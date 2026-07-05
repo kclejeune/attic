@@ -8,15 +8,38 @@
 	let { data, form } = $props();
 	const s = $derived(data.stats);
 	let running = $state(false);
+	let savingLimit = $state(false);
 
 	const tiles = $derived([
 		{ label: 'Caches', value: formatCount(s.caches), mono: false },
 		{ label: 'Store paths', value: formatCount(s.objects), mono: false },
 		{ label: 'NARs stored', value: formatCount(s.nars), mono: false },
-		{ label: 'Storage used', value: formatBytes(s.storageBytes), mono: true }
+		{
+			label: data.globalMaxBytes ? 'Storage used / limit' : 'Storage used',
+			value: data.globalMaxBytes
+				? `${formatBytes(s.storageBytes)} / ${formatBytes(data.globalMaxBytes)}`
+				: formatBytes(s.storageBytes),
+			mono: true
+		}
 	]);
 
 	const reclaimable = $derived(s.pendingNars + s.orphanNars + s.orphanChunks);
+	const globalMaxGib = $derived(
+		data.globalMaxBytes != null
+			? (data.globalMaxBytes / 2 ** 30).toFixed(1).replace(/\.0$/, '')
+			: ''
+	);
+	const gcReclaimed = $derived(
+		form?.gcStats
+			? (form.gcStats.abandoned_uploads_reaped ?? 0) +
+					(form.gcStats.abandoned_caches_reaped ?? 0) +
+					(form.gcStats.expired_objects_reaped ?? 0) +
+					(form.gcStats.size_evicted_objects ?? 0) +
+					(form.gcStats.global_evicted_objects ?? 0) +
+					(form.gcStats.orphan_nars_reaped ?? 0) +
+					(form.gcStats.orphan_chunks_reaped ?? 0)
+			: 0
+	);
 </script>
 
 <div class="mx-auto max-w-6xl px-8 py-8">
@@ -47,13 +70,14 @@
 			<div>
 				<h2 class="text-sm font-medium">Garbage collection</h2>
 				<p class="mt-1 text-sm text-muted-foreground">
-					Runs nightly. Reaps abandoned uploads and soft-deleted caches, retention-expired
-					paths, and unreferenced NARs and chunks.
+					Runs nightly. Reaps abandoned uploads and soft-deleted caches, retention-expired paths,
+					and unreferenced NARs and chunks.
 				</p>
 			</div>
 			<form
 				method="POST"
 				action="?/gc"
+				class="flex items-center gap-2"
 				use:enhance={() => {
 					running = true;
 					return async ({ update }) => {
@@ -62,12 +86,59 @@
 					};
 				}}
 			>
+				<Button type="submit" name="dry_run" value="1" variant="ghost" disabled={running}>
+					Preview
+				</Button>
 				<Button type="submit" variant="outline" disabled={running}>
 					<Trash2 class="size-4" />
 					{running ? 'Running…' : 'Run now'}
 				</Button>
 			</form>
 		</div>
+
+		<form
+			method="POST"
+			action="?/saveLimit"
+			class="mt-4 flex flex-wrap items-end gap-3 border-t pt-4"
+			use:enhance={() => {
+				savingLimit = true;
+				return async ({ update }) => {
+					await update({ reset: false });
+					savingLimit = false;
+				};
+			}}
+		>
+			<div class="space-y-1">
+				<label for="global_max_gib" class="text-xs text-muted-foreground">
+					Global storage limit (GiB)
+				</label>
+				<input
+					id="global_max_gib"
+					name="global_max_gib"
+					type="number"
+					step="0.1"
+					min="0"
+					placeholder="No limit"
+					value={globalMaxGib}
+					class="flex h-8 w-40 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+				/>
+			</div>
+			<Button type="submit" variant="outline" size="sm" disabled={savingLimit}>
+				{savingLimit ? 'Saving…' : 'Save limit'}
+			</Button>
+			<p class="basis-full text-xs text-muted-foreground">
+				Physical (deduplicated) bytes across all caches. When exceeded — checked after every push
+				and nightly — least-recently-used closures are evicted from any cache until under the limit;
+				pinned closures are never touched.
+			</p>
+			{#if form?.limitError}
+				<p class="text-sm text-destructive">{form.limitError}</p>
+			{:else if form?.limitSaved}
+				<span class="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+					<Check class="size-4" /> Saved
+				</span>
+			{/if}
+		</form>
 
 		<dl class="mt-4 grid grid-cols-3 gap-4 border-t pt-4 text-sm">
 			<div>
@@ -86,16 +157,24 @@
 
 		{#if form?.gcError}
 			<p class="mt-4 text-sm text-destructive">{form.gcError}</p>
+		{:else if form?.gcStats && form?.dryRun}
+			<p class="mt-4 text-sm text-muted-foreground">
+				Preview: {formatCount(
+					(form.gcStats.expired_objects_reaped ?? 0) +
+						(form.gcStats.size_evicted_objects ?? 0) +
+						(form.gcStats.global_evicted_objects ?? 0)
+				)} paths would be removed by retention ({formatCount(
+					form.gcStats.expired_objects_reaped ?? 0
+				)} expired, {formatCount(form.gcStats.size_evicted_objects ?? 0)} over cache limits, {formatCount(
+					form.gcStats.global_evicted_objects ?? 0
+				)} over the global limit). Nothing was deleted.
+			</p>
 		{:else if form?.gcStats}
 			<p class="mt-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground">
 				<Check class="size-4 text-primary" />
-				Reclaimed {formatCount(
-					(form.gcStats.abandoned_uploads_reaped ?? 0) +
-						(form.gcStats.abandoned_caches_reaped ?? 0) +
-						(form.gcStats.expired_objects_reaped ?? 0) +
-						(form.gcStats.orphan_nars_reaped ?? 0) +
-						(form.gcStats.orphan_chunks_reaped ?? 0)
-				)} items ({formatCount(form.gcStats.orphan_chunks_reaped ?? 0)} chunks freed from storage).
+				Reclaimed {formatCount(gcReclaimed)} items ({formatCount(
+					form.gcStats.orphan_chunks_reaped ?? 0
+				)} chunks freed from storage).
 			</p>
 		{:else if reclaimable === 0}
 			<p class="mt-4 text-sm text-muted-foreground">Nothing to reclaim right now.</p>

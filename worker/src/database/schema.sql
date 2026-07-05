@@ -13,11 +13,49 @@ CREATE TABLE IF NOT EXISTS cache (
     compression TEXT NOT NULL DEFAULT 'br', -- none, zstd, br, gzip
     created_at TEXT NOT NULL,
     deleted_at TEXT,
-    retention_period INTEGER
+    retention_period INTEGER,
+    retention_max_bytes INTEGER, -- size budget in compressed bytes; NULL = unlimited
+    upstream_caches TEXT NOT NULL DEFAULT '["https://cache.nixos.org"]'
 );
 
 CREATE INDEX IF NOT EXISTS idx_cache_name ON cache(name);
 CREATE INDEX IF NOT EXISTS idx_cache_deleted ON cache(deleted_at);
+
+-- Direct references between store paths, derived from object.refs JSON.
+-- ref_hash is the 32-char store path hash of the referenced path; resolution
+-- to an object row is per-cache via (cache_id, store_path_hash).
+CREATE TABLE IF NOT EXISTS object_ref (
+    object_id INTEGER NOT NULL REFERENCES object(id),
+    ref_hash TEXT NOT NULL,
+    PRIMARY KEY (object_id, ref_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_object_ref_ref_hash ON object_ref(ref_hash);
+
+-- Pinned store paths: GC always keeps the full closure of every root.
+CREATE TABLE IF NOT EXISTS gc_root (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cache_id INTEGER NOT NULL REFERENCES cache(id),
+    store_path_hash TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (cache_id, store_path_hash)
+);
+
+-- Server-wide settings (key/value), e.g. global_max_bytes (physical storage
+-- ceiling across all caches, enforced by GC's global eviction pass).
+CREATE TABLE IF NOT EXISTS server_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- Cached upstream narinfo existence checks (get-missing-paths filtering).
+CREATE TABLE IF NOT EXISTS upstream_check (
+    upstream TEXT NOT NULL,
+    store_path_hash TEXT NOT NULL,
+    present INTEGER NOT NULL,
+    checked_at TEXT NOT NULL,
+    PRIMARY KEY (upstream, store_path_hash)
+);
 
 -- NAR table (content-addressed)
 CREATE TABLE IF NOT EXISTS nar (

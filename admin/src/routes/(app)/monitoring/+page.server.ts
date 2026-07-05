@@ -175,7 +175,13 @@ function sampleBuckets(granularity: Granularity): Bucket[] {
 		const bytes = paths * (4_000_000 + (i % 4) * 1_500_000);
 		cumPaths += paths;
 		cumBytes += bytes;
-		out.push({ date: iso(start + i * step), paths, bytes, cumulativePaths: cumPaths, cumulativeBytes: cumBytes });
+		out.push({
+			date: iso(start + i * step),
+			paths,
+			bytes,
+			cumulativePaths: cumPaths,
+			cumulativeBytes: cumBytes
+		});
 	}
 	return out;
 }

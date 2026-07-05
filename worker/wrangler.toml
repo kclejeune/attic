@@ -3,10 +3,11 @@ main = "src/entry.js"
 compatibility_date = "2025-09-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Garbage collection runs daily; reaps abandoned chunked uploads (open R2
-# multipart uploads + pending_upload rows).
+# Garbage collection moved to the attic-admin worker (TypeScript, closure-aware
+# retention); its nightly cron owns GC now. No cron here — the legacy Rust GC
+# is not closure-aware and must not run.
 [triggers]
-crons = ["0 3 * * *"]
+crons = []
 
 [build]
 command = "npm install && cargo install -q worker-build@0.1.14 && worker-build --release"

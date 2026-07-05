@@ -1,10 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import {
-	PATHS_PAGE_SIZE,
-	parseSort,
-	parseDir,
-	queryStorePaths
-} from '$lib/server/store-paths';
+import { PATHS_PAGE_SIZE, parseSort, parseDir, queryStorePaths } from '$lib/server/store-paths';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ platform, params, url, locals }) => {
