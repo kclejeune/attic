@@ -27,27 +27,58 @@ export const load: PageServerLoad = async ({ platform }) => {
 		return { buckets: sampleBuckets() };
 	}
 
+	// Bucket by the Monday of each week (UTC) so the series has a canonical,
+	// gap-fillable key rather than "first date seen in the week".
 	const { results } = await db
 		.prepare(
-			`SELECT MIN(date(o.created_at)) AS week_start,
+			`SELECT date(o.created_at, '-' || ((cast(strftime('%w', o.created_at) AS INTEGER) + 6) % 7) || ' days') AS week_start,
 			        COUNT(*) AS paths,
 			        COALESCE(SUM(ch.file_size), 0) AS bytes
 			 FROM object o
 			 JOIN nar n ON n.id = o.nar_id
 			 JOIN chunkref cr ON cr.nar_id = n.id
 			 JOIN chunk ch ON ch.id = cr.chunk_id
-			 GROUP BY strftime('%Y-%W', o.created_at)
+			 GROUP BY week_start
 			 ORDER BY week_start`
 		)
 		.all<WeekRow>();
 
-	let cumulative = 0;
-	const buckets: Bucket[] = results.map((r) => {
-		cumulative += r.bytes;
-		return { weekStart: r.week_start, paths: r.paths, bytes: r.bytes, cumulativeBytes: cumulative };
-	});
+	return { buckets: fillWeeks(results) };
+}
 
-	return { buckets };
+const WEEK_MS = 7 * 86400_000;
+
+/** Monday (UTC) of the week containing `ms`, as an epoch-ms value. */
+function mondayOf(ms: number): number {
+	const d = new Date(ms);
+	const daysSinceMonday = (d.getUTCDay() + 6) % 7;
+	return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysSinceMonday);
+}
+
+/**
+ * Turn sparse weekly rows into a continuous week-by-week series from the first
+ * active week through the current week, zero-filling weeks with no uploads and
+ * carrying cumulative storage forward across them.
+ */
+function fillWeeks(rows: WeekRow[]): Bucket[] {
+	if (rows.length === 0) return [];
+
+	const byWeek = new Map(rows.map((r) => [r.week_start, r]));
+	const startMs = Date.parse(`${rows[0].week_start}T00:00:00Z`);
+	const lastMs = Date.parse(`${rows[rows.length - 1].week_start}T00:00:00Z`);
+	const endMs = Math.max(lastMs, mondayOf(Date.now()));
+
+	const buckets: Bucket[] = [];
+	let cumulative = 0;
+	// Cap iterations as a guard against unexpected date values.
+	for (let ms = startMs, i = 0; ms <= endMs && i < 520; ms += WEEK_MS, i++) {
+		const weekStart = new Date(ms).toISOString().slice(0, 10);
+		const row = byWeek.get(weekStart);
+		const bytes = row?.bytes ?? 0;
+		cumulative += bytes;
+		buckets.push({ weekStart, paths: row?.paths ?? 0, bytes, cumulativeBytes: cumulative });
+	}
+	return buckets;
 };
 
 function sampleBuckets(): Bucket[] {
