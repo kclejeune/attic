@@ -637,6 +637,38 @@ impl D1Backend {
         Ok(())
     }
 
+    /// Hard-remove caches soft-deleted before `cutoff` (RFC3339), plus their
+    /// objects and pending uploads. Orphaned NARs/chunks are reclaimed by the
+    /// orphan sweep. Returns the number of caches reaped.
+    pub async fn reap_abandoned_caches(&self, cutoff: &str) -> WorkerResult<u64> {
+        for sql in [
+            "DELETE FROM object WHERE cache_id IN \
+             (SELECT id FROM cache WHERE deleted_at IS NOT NULL AND deleted_at < ?1)",
+            "DELETE FROM pending_upload WHERE cache_id IN \
+             (SELECT id FROM cache WHERE deleted_at IS NOT NULL AND deleted_at < ?1)",
+        ] {
+            self.db
+                .prepare(sql)
+                .bind(&[cutoff.into()])
+                .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?
+                .run()
+                .await
+                .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?;
+        }
+
+        let meta = self
+            .db
+            .prepare("DELETE FROM cache WHERE deleted_at IS NOT NULL AND deleted_at < ?1")
+            .bind(&[cutoff.into()])
+            .map_err(|e| WorkerError::Database(format!("Bind error: {}", e)))?
+            .run()
+            .await
+            .map_err(|e| WorkerError::Database(format!("Query error: {}", e)))?
+            .meta()
+            .map_err(|e| WorkerError::Database(format!("Meta error: {}", e)))?;
+        Ok(meta.and_then(|m| m.changes).unwrap_or(0) as u64)
+    }
+
     /// Insert a new pending chunked-upload row.
     pub async fn create_pending_upload(&self, upload: &PendingUpload) -> WorkerResult<()> {
         let stmt = self

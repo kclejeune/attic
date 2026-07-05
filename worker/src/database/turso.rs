@@ -611,6 +611,29 @@ impl TursoBackend {
         Ok(())
     }
 
+    /// Hard-remove caches soft-deleted before `cutoff` (RFC3339), plus their
+    /// objects and pending uploads. Orphaned NARs/chunks are reclaimed by the
+    /// orphan sweep. Returns the number of caches reaped.
+    pub async fn reap_abandoned_caches(&self, cutoff: &str) -> WorkerResult<u64> {
+        for sql in [
+            "DELETE FROM object WHERE cache_id IN \
+             (SELECT id FROM cache WHERE deleted_at IS NOT NULL AND deleted_at < ?)",
+            "DELETE FROM pending_upload WHERE cache_id IN \
+             (SELECT id FROM cache WHERE deleted_at IS NOT NULL AND deleted_at < ?)",
+        ] {
+            self.execute(sql, vec![serde_json::Value::String(cutoff.to_string())])
+                .await?;
+        }
+
+        let result = self
+            .execute(
+                "DELETE FROM cache WHERE deleted_at IS NOT NULL AND deleted_at < ?",
+                vec![serde_json::Value::String(cutoff.to_string())],
+            )
+            .await?;
+        Ok(result.rows_affected.unwrap_or(0))
+    }
+
     /// Insert a new pending chunked-upload row.
     pub async fn create_pending_upload(&self, upload: &PendingUpload) -> WorkerResult<()> {
         self.execute(

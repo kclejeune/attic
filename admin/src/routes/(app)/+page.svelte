@@ -47,8 +47,8 @@
 			<div>
 				<h2 class="text-sm font-medium">Garbage collection</h2>
 				<p class="mt-1 text-sm text-muted-foreground">
-					Runs nightly. Reaps abandoned uploads, retention-expired paths, and unreferenced
-					NARs and chunks.
+					Runs nightly. Reaps abandoned uploads and soft-deleted caches, retention-expired
+					paths, and unreferenced NARs and chunks.
 				</p>
 			</div>
 			<form
@@ -91,6 +91,7 @@
 				<Check class="size-4 text-primary" />
 				Reclaimed {formatCount(
 					(form.gcStats.abandoned_uploads_reaped ?? 0) +
+						(form.gcStats.abandoned_caches_reaped ?? 0) +
 						(form.gcStats.expired_objects_reaped ?? 0) +
 						(form.gcStats.orphan_nars_reaped ?? 0) +
 						(form.gcStats.orphan_chunks_reaped ?? 0)

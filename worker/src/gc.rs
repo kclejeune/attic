@@ -12,11 +12,16 @@ use crate::state::WorkerState;
 /// Age after which an in-progress chunked upload is considered abandoned.
 const ABANDONED_UPLOAD_MAX_AGE_SECS: i64 = 24 * 60 * 60;
 
+/// Grace period before a soft-deleted (but never-reused) cache is hard-reaped.
+/// Generous, so an accidental delete stays recoverable for a while.
+const ABANDONED_CACHE_GRACE_SECS: i64 = 7 * 24 * 60 * 60;
+
 /// Result of a GC run, for logging and the admin trigger response.
 #[derive(Debug, Default, Serialize)]
 pub struct GcStats {
     pub abandoned_uploads_reaped: u64,
     pub abandoned_upload_errors: u64,
+    pub abandoned_caches_reaped: u64,
     pub expired_objects_reaped: u64,
     pub orphan_nars_reaped: u64,
     pub orphan_chunks_reaped: u64,
@@ -30,6 +35,7 @@ pub async fn run(state: &WorkerState) -> GcStats {
     let mut stats = GcStats::default();
 
     reap_abandoned_uploads(state, &mut stats).await;
+    reap_abandoned_caches(state, &mut stats).await;
     reap_expired_objects(state, &mut stats).await;
     reap_orphans(state, &mut stats).await;
 
@@ -39,6 +45,18 @@ pub async fn run(state: &WorkerState) -> GcStats {
     }
 
     stats
+}
+
+/// Hard-reap caches that were soft-deleted and never reused past the grace
+/// period, freeing their storage (the orphan sweep that follows deletes the
+/// freed NAR/chunk bytes from R2).
+async fn reap_abandoned_caches(state: &WorkerState, stats: &mut GcStats) {
+    let cutoff = (chrono::Utc::now() - chrono::Duration::seconds(ABANDONED_CACHE_GRACE_SECS))
+        .to_rfc3339();
+    match state.database.reap_abandoned_caches(&cutoff).await {
+        Ok(n) => stats.abandoned_caches_reaped = n,
+        Err(e) => console_log!("gc: abandoned cache reap failed: {}", e),
+    }
 }
 
 /// Time-based retention: drop objects that have aged out of their cache's window.

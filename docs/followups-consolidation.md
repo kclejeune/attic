@@ -114,12 +114,12 @@ stored objects before/after.
 
 ## Workstream D — Feature-parity / GC gaps (both impls)
 
-- **D1. GC abandoned soft-deleted caches.** Neither impl reclaims a cache that
-  was soft-deleted and never reused — its NAR bytes sit in R2/S3 forever. Add a
-  sweep to `worker/src/gc.rs` (and `server/src/gc.rs`): for each cache with
-  `deleted_at < now - grace_period`, run the `purge_deleted_cache` cascade
-  (objects → chunks → storage → cache row). This is a real storage leak; it's
-  also what left `kclejeune` recoverable, so keep the grace window generous.
+- **D1. GC abandoned soft-deleted caches. — DONE (worker).** `worker/src/gc.rs`
+  now runs a `reap_abandoned_caches` sweep before the orphan pass: caches with
+  `deleted_at < now - 7d` are hard-reaped (objects + pending uploads + row), and
+  the following orphan sweep frees their NAR/chunk bytes from R2. Verified against
+  live D1 (reaped the December `brcache` tombstone; `kclejeune` untouched).
+  *Remaining:* mirror the sweep in `server/src/gc.rs` for atticd.
 - **D2. Cache rename parity in `atticd`** (also listed under B3, tracked here as a
   standalone parity item).
 - **D3.** Resolve dead `attic::api::v1::cache_config::supports_server_compression()`

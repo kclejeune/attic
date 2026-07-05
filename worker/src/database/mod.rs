@@ -222,6 +222,14 @@ impl Database {
         }
     }
 
+    /// Reap caches soft-deleted before `cutoff`, returning how many were removed.
+    pub async fn reap_abandoned_caches(&self, cutoff: &str) -> WorkerResult<u64> {
+        match self {
+            Database::D1(backend) => backend.reap_abandoned_caches(cutoff).await,
+            Database::Turso(backend) => backend.reap_abandoned_caches(cutoff).await,
+        }
+    }
+
     /// Insert a new pending chunked-upload row.
     pub async fn create_pending_upload(&self, upload: &PendingUpload) -> WorkerResult<()> {
         match self {
